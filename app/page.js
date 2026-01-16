@@ -1,7 +1,61 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown } from 'lucide-react';
+import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain } from 'lucide-react';
+// Firebaseの機能をインポート
+import { initializeApp, getApps, getApp } from "firebase/app";
+import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
+import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+
+// --- ★重要★ Firebase設定 ---------------------------------------
+// 手順1でコピーした内容に書き換えてください
+const userFirebaseConfig = {
+ apiKey: "AIzaSyADNa2ix6NWLt-EEtIbDVTs6qsXsnubn8Y",
+  authDomain: "ai-ogiri-app-2026-tmsyk.firebaseapp.com",
+  projectId: "ai-ogiri-app-2026-tmsyk",
+  storageBucket: "ai-ogiri-app-2026-tmsyk.firebasestorage.app",
+  messagingSenderId: "9612204174",
+  appId: "1:9612204174:web:7f1d36e12cd2d673da11df",
+  measurementId: "G-LW7C3ZSNKD"
+};
+// ---------------------------------------------------------------
+
+// Firebase初期化ロジック
+let app, auth, db;
+try {
+  // Canvas環境かVercel環境かを判定してConfigを使い分ける
+  const config = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : userFirebaseConfig;
+  
+  if (!getApps().length) {
+    app = initializeApp(config);
+  } else {
+    app = getApp();
+  }
+  auth = getAuth(app);
+  db = getFirestore(app);
+} catch (e) {
+  console.error("Firebase init error:", e);
+}
+
+// コレクションパス取得ヘルパー（環境によるパスの違いを吸収）
+const getCollectionRef = (collectionName) => {
+  if (typeof __app_id !== 'undefined') {
+    // Canvas環境用
+    return collection(db, 'artifacts', __app_id, 'public', 'data', collectionName);
+  } else {
+    // Vercel(本番)環境用：ルートに作る
+    return collection(db, collectionName);
+  }
+};
+
+const getDocRef = (collectionName, docId) => {
+    if (typeof __app_id !== 'undefined') {
+        return doc(db, 'artifacts', __app_id, 'public', 'data', collectionName, docId);
+    } else {
+        return doc(db, collectionName, docId);
+    }
+};
+
 
 // --- フォールバック用データ ---
 const FALLBACK_TOPICS = [
@@ -43,11 +97,12 @@ const FALLBACK_COMMENTS = [
 ];
 
 // --- 定数 ---
-const TOTAL_ROUNDS_SCORE_ATTACK = 5; // スコアアタックのラウンド数
-const SURVIVAL_PASS_SCORE = 60; // サバイバルで合格ラインとなる点数
-const TIME_ATTACK_GOAL_SCORE = 500; // タイムアタックの目標スコア
+const TOTAL_ROUNDS_SCORE_ATTACK = 5;
+const SURVIVAL_PASS_SCORE = 60;
+const TIME_ATTACK_GOAL_SCORE = 500;
+const HIGH_SCORE_THRESHOLD = 80;
 
-// --- ユーティリティ関数 ---
+// --- ユーティリティ ---
 const shuffleArray = (array) => {
   const newArray = [...array];
   for (let i = newArray.length - 1; i > 0; i--) {
@@ -57,7 +112,6 @@ const shuffleArray = (array) => {
   return newArray;
 };
 
-// 時間フォーマット (ms -> mm:ss.SS)
 const formatTime = (ms) => {
   if (!ms) return "--:--";
   const minutes = Math.floor(ms / 60000);
@@ -70,8 +124,8 @@ const formatTime = (ms) => {
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({
-    mode: 'single', // 'single' | 'multi'
-    singleMode: 'score_attack', // 'score_attack' | 'survival' | 'time_attack'
+    mode: 'single',
+    singleMode: 'score_attack',
     playerCount: 3,
   });
 
@@ -80,14 +134,22 @@ export default function AiOgiriApp() {
   const [isJudging, setIsJudging] = useState(false);
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [showRules, setShowRules] = useState(false);
+  
+  const [aiFeedback, setAiFeedback] = useState(null);
 
-  // ランキングデータ
-  const [rankings, setRankings] = useState({
-    score_attack: [], // { score: number, date: string }
-    survival: [],     // { count: number, date: string }
-    time_attack: []   // { time: number, date: string }
+  // Firestoreから取得する共有データ
+  const [learnedData, setLearnedData] = useState({
+    topics: [],
+    goodAnswers: []
   });
 
+  const [rankings, setRankings] = useState({
+    score_attack: [],
+    survival: [],
+    time_attack: []
+  });
+
+  const [currentUser, setCurrentUser] = useState(null);
   const [cardDeck, setCardDeck] = useState([]);
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
@@ -98,12 +160,9 @@ export default function AiOgiriApp() {
   const [gamePhase, setGamePhase] = useState('drawing');
   const [currentRound, setCurrentRound] = useState(1);
   
-  // タイムアタック用
   const [startTime, setStartTime] = useState(null);
   const [finishTime, setFinishTime] = useState(null);
   const [displayTime, setDisplayTime] = useState("00:00");
-
-  // サバイバル用
   const [isSurvivalGameOver, setIsSurvivalGameOver] = useState(false);
   
   const [currentTopic, setCurrentTopic] = useState('');
@@ -118,15 +177,120 @@ export default function AiOgiriApp() {
   const [singlePlayerHand, setSinglePlayerHand] = useState([]);
   const [singleSelectedCard, setSingleSelectedCard] = useState(null);
 
-  // --- ランキング読み込み (初回のみ) ---
+  // --- Firebase Auth & Firestore同期 ---
+  
   useEffect(() => {
-    const savedRankings = localStorage.getItem('aiOgiriRankings');
-    if (savedRankings) {
-      setRankings(JSON.parse(savedRankings));
-    }
+    // 1. 匿名認証
+    const initAuth = async () => {
+        try {
+            await signInAnonymously(auth);
+        } catch (error) {
+            console.error("Auth Error", error);
+        }
+    };
+    initAuth();
+    
+    const unsubscribeAuth = onAuthStateChanged(auth, (user) => {
+        setCurrentUser(user);
+    });
+
+    return () => unsubscribeAuth();
   }, []);
 
-  // --- タイムアタック用タイマー ---
+  useEffect(() => {
+    if (!currentUser) return;
+
+    // 2. 学習データのリアルタイム同期
+    const learnedDocRef = getDocRef('shared_db', 'learned_data');
+    const unsubLearned = onSnapshot(learnedDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+            const data = docSnap.data();
+            setLearnedData({
+                topics: data.topics || [],
+                goodAnswers: data.goodAnswers || []
+            });
+            // 学習したお題を候補に追加
+            if (data.topics && data.topics.length > 0) {
+                setTopicsList(prev => {
+                    const merged = [...FALLBACK_TOPICS, ...data.topics];
+                    return Array.from(new Set(merged));
+                });
+            }
+        } else {
+            // 初回作成
+            setDoc(learnedDocRef, { topics: [], goodAnswers: [] });
+        }
+    });
+
+    // 3. ランキングのリアルタイム同期
+    const rankingDocRef = getDocRef('shared_db', 'rankings');
+    const unsubRankings = onSnapshot(rankingDocRef, (docSnap) => {
+        if (docSnap.exists()) {
+            setRankings(docSnap.data());
+        } else {
+            setDoc(rankingDocRef, { score_attack: [], survival: [], time_attack: [] });
+        }
+    });
+
+    return () => {
+        unsubLearned();
+        unsubRankings();
+    };
+  }, [currentUser]);
+
+  // --- データの保存処理 (Firestore) ---
+
+  const saveLearnedTopic = async (newTopic) => {
+    if (!currentUser) return;
+    const docRef = getDocRef('shared_db', 'learned_data');
+    try {
+        await updateDoc(docRef, {
+            topics: arrayUnion(newTopic)
+        });
+    } catch (e) { console.error(e); }
+  };
+
+  const saveLearnedAnswer = async (newAnswer) => {
+    if (!currentUser) return;
+    const docRef = getDocRef('shared_db', 'learned_data');
+    try {
+        await updateDoc(docRef, {
+            goodAnswers: arrayUnion(newAnswer)
+        });
+    } catch (e) { console.error(e); }
+  };
+
+  const updateRanking = async (mode, value) => {
+    if (!currentUser) return;
+    const docRef = getDocRef('shared_db', 'rankings');
+    
+    // 現在のランキングを取得して更新（トランザクションではない簡易実装）
+    try {
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+            const currentData = docSnap.data();
+            const currentList = currentData[mode] || [];
+            const newEntry = { value, date: new Date().toLocaleDateString() };
+            let newList = [...currentList, newEntry];
+
+            // ソート
+            if (mode === 'score_attack' || mode === 'survival') {
+                newList.sort((a, b) => b.value - a.value);
+            } else if (mode === 'time_attack') {
+                newList.sort((a, b) => a.value - b.value);
+            }
+
+            // Top3のみ保存
+            const top3 = newList.slice(0, 3);
+            
+            await updateDoc(docRef, {
+                [mode]: top3
+            });
+        }
+    } catch (e) { console.error(e); }
+  };
+
+  // --- タイマー ---
   useEffect(() => {
     let interval;
     if (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && appMode === 'game' && startTime && !finishTime) {
@@ -139,41 +303,15 @@ export default function AiOgiriApp() {
     return () => clearInterval(interval);
   }, [gameConfig, appMode, startTime, finishTime]);
 
-  // --- ランキング更新処理 ---
-  const updateRanking = (mode, value) => {
-    setRankings(prev => {
-      const currentList = prev[mode] || [];
-      const newEntry = { value, date: new Date().toLocaleDateString() };
-      let newList = [...currentList, newEntry];
-
-      // ソートとTop3抽出
-      if (mode === 'score_attack' || mode === 'survival') {
-        // 大きい順
-        newList.sort((a, b) => b.value - a.value);
-      } else if (mode === 'time_attack') {
-        // 小さい順（タイム）
-        newList.sort((a, b) => a.value - b.value);
-      }
-
-      const top3 = newList.slice(0, 3);
-      
-      const newRankings = { ...prev, [mode]: top3 };
-      localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings));
-      return newRankings;
-    });
-  };
-
   // --- API関数 ---
   const callGemini = async (prompt, systemInstruction = "") => {
     if (!isAiActive) return null;
-
     try {
       const response = await fetch('/api/gemini', {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ prompt, systemInstruction }),
       });
-
       if (!response.ok) {
         if (response.status === 429 || response.status >= 500) {
           console.warn("API limit reached or server error. Switching to offline mode.");
@@ -181,26 +319,37 @@ export default function AiOgiriApp() {
         }
         throw new Error(`API Error: ${response.status}`);
       }
-
       const data = await response.json();
       let text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      
       if (!text) return null;
-
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      if (jsonMatch) {
-        return JSON.parse(jsonMatch[0]);
-      } else {
-        text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-        return JSON.parse(text);
-      }
+      if (jsonMatch) return JSON.parse(jsonMatch[0]);
+      text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+      return JSON.parse(text);
     } catch (error) {
       console.error("Gemini API Error:", error);
       return null;
     }
   };
 
+  const checkContentSafety = async (text) => {
+    if (!isAiActive) return false;
+    const prompt = `
+      あなたはコンテンツの安全性を監視する厳格なモデレーターです。
+      以下のテキストが、公序良俗に反する言葉、差別用語、性的な表現、暴力的な表現、犯罪を助長する表現、他人を不快にする誹謗中傷を含んでいるか、非常に厳しく判定してください。
+      判定結果: 不適切な要素が少しでも含まれていれば true、問題なければ false を返してください。
+      テキスト: "${text}"
+      出力はJSON形式で {"isInappropriate": trueまたはfalse} としてください。
+    `;
+    const result = await callGemini(prompt, "あなたは厳格なコンテンツモデレーターです。");
+    if (result === null) return true;
+    return result?.isInappropriate || false;
+  };
+
   const fetchAiTopic = async () => {
+    // 学習データから参考お題を抽出
+    const referenceTopics = shuffleArray(learnedData.topics).slice(0, 3).join("\n");
+    const referenceText = referenceTopics ? `参考にすべき過去の良質なお題例(ユーザー作成):\n${referenceTopics}` : "";
     const prompt = `
       大喜利のお題を1つ作成してください。
       【重要条件】
@@ -208,46 +357,25 @@ export default function AiOgiriApp() {
       2. 文脈として自然で、日本語として違和感のない穴埋め文章にしてください。
       3. 回答が入るべき箇所を必ず「{placeholder}」という文字列にすること。
       4. 出力はJSON形式で {"topic": "作成したお題"} とすること。
+      ${referenceText}
       例: "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。"
     `;
     const result = await callGemini(prompt, "あなたは大喜利の司会者です。");
     return result?.topic || null;
   };
 
-  const checkContentSafety = async (text) => {
-    if (!isAiActive) return false;
-
-    const prompt = `
-      あなたはコンテンツの安全性を監視する厳格なモデレーターです。
-      以下のテキストが、公序良俗に反する言葉、差別用語、性的な表現、暴力的な表現、犯罪を助長する表現、他人を不快にする誹謗中傷を含んでいるか、非常に厳しく判定してください。
-      
-      判定基準:
-      1. 伏せ字や隠語であっても、文脈から不適切な意図が読み取れる場合は「不適切」とします。
-      2. 「死」「殺」「馬鹿」などの直接的な暴言が含まれる場合は即座に「不適切」とします。
-      3. 大喜利のお題としても、あまりに下品あるいは攻撃的なものは「不適切」とします。
-
-      判定結果:
-      不適切な要素が少しでも含まれていれば true、問題なければ false を返してください。
-      
-      テキスト: "${text}"
-      
-      出力はJSON形式で {"isInappropriate": trueまたはfalse} としてください。
-    `;
-    
-    const result = await callGemini(prompt, "あなたは厳格なコンテンツモデレーターです。");
-    
-    if (result === null) return true;
-    return result?.isInappropriate || false;
-  };
-
   const fetchAiCards = async (count = 10) => {
+    // 学習データから参考回答を抽出
+    const referenceAnswers = shuffleArray(learnedData.goodAnswers).slice(0, 5).join(", ");
+    const referenceText = referenceAnswers ? `ユーザーが高得点を出した回答の傾向（参考）: ${referenceAnswers}` : "";
     const prompt = `
       大喜利の回答カード（手札）として使える、単語や短いフレーズを${count}個生成してください。
       条件:
       1. シュール、面白い、少し自虐的、または全く無関係な名詞など、バラエティ豊かにすること。
-      2. 毎回必ず違う種類の単語を選ぶこと。既存のありふれた回答は避けること。
+      2. 毎回必ず違う種類の単語を選ぶこと。
       3. 基本的に「体言止め」できる名詞や名詞句にすること。
       4. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} とすること。
+      ${referenceText}
     `;
     const result = await callGemini(prompt, "あなたはユーモアのセンスがある構成作家です。");
     return result?.answers || null;
@@ -258,22 +386,17 @@ export default function AiOgiriApp() {
       以下のお題と回答の組み合わせを評価してください。
       お題: ${topic}
       回答: ${answer}
-      
       条件:
-      1. まず回答内容を厳しくチェックしてください。不適切な言葉が含まれている場合は、面白さに関わらず「不適切」と判定してください。
+      1. まず回答内容を厳しくチェックしてください。不適切な言葉が含まれている場合は「不適切」と判定してください。
       2. 不適切な場合は、isInappropriate を true にしてください。
       3. 不適切でない場合は、面白さ、意外性、文脈のマッチ度を基準に0〜100点で採点してください。
       4. バラエティ番組の司会者のような、気が利いたツッコミや笑えるコメント（50文字以内）を付けてください。
-      
-      出力はJSON形式で以下のようにしてください。
-      {"score": 点数(数値), "comment": "コメント", "isInappropriate": trueまたはfalse}
+      出力はJSON形式で {"score": 点数, "comment": "コメント", "isInappropriate": bool} とすること。
     `;
-    
     const result = await callGemini(prompt, "あなたはお笑いセンス抜群の大喜利審査員ですが、コンプライアンスには非常に厳しい一面も持っています。");
     return result || null;
   };
 
-  // --- デッキ管理 ---
   const addCardsToDeck = (newCards) => {
     const uniqueNewCards = newCards.filter(card => {
       if (usedCardsRef.current.has(card)) return false;
@@ -311,6 +434,7 @@ export default function AiOgiriApp() {
     setStartTime(null);
     setFinishTime(null);
     setDisplayTime("00:00");
+    setAiFeedback(null);
 
     if (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack') {
         setStartTime(Date.now());
@@ -378,7 +502,6 @@ export default function AiOgiriApp() {
   const drawCards = (deck, count) => {
     const needed = Math.max(0, count);
     if (needed === 0) return { hand: [], remainingDeck: deck };
-
     let currentDeck = [...deck];
     if (currentDeck.length < needed) {
       const fallback = shuffleArray([...FALLBACK_ANSWERS]);
@@ -386,7 +509,6 @@ export default function AiOgiriApp() {
       currentDeck = [...currentDeck, ...uniqueFallback];
       if (currentDeck.length < needed) currentDeck = [...currentDeck, ...FALLBACK_ANSWERS];
     }
-
     const hand = [];
     for(let i=0; i<needed; i++) {
       const randomIndex = Math.floor(Math.random() * currentDeck.length);
@@ -405,6 +527,7 @@ export default function AiOgiriApp() {
     setMasterIndex(nextMasterIdx);
     setGamePhase('drawing');
     setManualTopicInput(''); 
+    setAiFeedback(null);
 
     if (gameConfig.mode === 'single') {
       setSinglePlayerHand(prev => {
@@ -427,12 +550,30 @@ export default function AiOgiriApp() {
       setPlayers(updatedPlayers);
       setCardDeck(tempDeck);
     }
-    setTimeout(() => setGamePhase('master_topic'), 800);
+
+    const isAutoTopicMode = gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle';
+
+    if (isAutoTopicMode) {
+        let nextTopic = "";
+        if (isAiActive) {
+            try {
+                const fetchedTopic = await fetchAiTopic();
+                nextTopic = fetchedTopic || "";
+            } catch (e) { console.error(e); }
+        }
+        if (!nextTopic) {
+            nextTopic = topicsList[Math.floor(Math.random() * topicsList.length)];
+        }
+        if (!nextTopic.includes('{placeholder}')) nextTopic += " {placeholder}";
+        setCurrentTopic(nextTopic);
+        setGamePhase('answer_input');
+    } else {
+        setTimeout(() => setGamePhase('master_topic'), 800);
+    }
   };
 
   const nextRound = () => {
     if (gameConfig.mode === 'single') {
-        // --- モード別終了判定 & ランキング更新 ---
         if (gameConfig.singleMode === 'score_attack') {
             if (currentRound >= TOTAL_ROUNDS_SCORE_ATTACK) {
                 updateRanking('score_attack', players[0].score);
@@ -441,7 +582,6 @@ export default function AiOgiriApp() {
             }
         } else if (gameConfig.singleMode === 'survival') {
             if (isSurvivalGameOver) {
-                // サバイバルは失敗したラウンドの一つ前までが記録
                 const wins = currentRound - 1;
                 updateRanking('survival', wins);
                 setGamePhase('final_result');
@@ -455,11 +595,9 @@ export default function AiOgiriApp() {
                 return;
             }
         }
-
         setCurrentRound(prev => prev + 1);
         startRoundProcess(players, 0);
     } else {
-      // マルチプレイ
       if (selectedSubmission.isDummy) {
          startRoundProcess(players, masterIndex);
       } else {
@@ -477,13 +615,16 @@ export default function AiOgiriApp() {
     const topicText = currentTopic.replace('{placeholder}', '___');
     const answerText = selectedSubmission?.answerText || '';
     const shareText = `【AI大喜利】\nお題：${topicText}\n回答：${answerText}\n\n#AI大喜利 #Gemini`;
-    
     if (navigator.clipboard) {
         navigator.clipboard.writeText(shareText).then(() => {
             setIsCopied(true);
             setTimeout(() => setIsCopied(false), 2000);
         });
     }
+  };
+
+  const handleAiFeedback = (isGood) => {
+    setAiFeedback(isGood ? 'good' : 'bad');
   };
 
   const generateAiTopic = async () => {
@@ -501,13 +642,19 @@ export default function AiOgiriApp() {
     setIsCheckingTopic(true);
     const isUnsafe = await checkContentSafety(manualTopicInput);
     if (isUnsafe) {
-        alert("⚠️ AI判定：お題に不適切な表現が含まれているため、使用できません。\n\n表現を見直して、健全なお題にしてください。");
+        alert("⚠️ AI判定：お題に不適切な表現が含まれているため、使用できません。");
         setIsCheckingTopic(false);
         return;
     }
     let finalTopic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
-    if (!topicsList.includes(finalTopic)) setTopicsList(prev => [...prev, finalTopic]);
+    
+    // 【学習】新しいお題ならFirestoreへ保存
+    if (!topicsList.includes(finalTopic)) {
+      setTopicsList(prev => [...prev, finalTopic]);
+      saveLearnedTopic(finalTopic);
+    }
+
     setCurrentTopic(finalTopic);
     setIsCheckingTopic(false);
     if (gameConfig.mode === 'single') setGamePhase('answer_input');
@@ -546,7 +693,7 @@ export default function AiOgiriApp() {
     setIsJudging(true);
     const result = await fetchAiJudgment(currentTopic, answerText);
     if (result && result.isInappropriate) {
-        alert("⚠️ AI判定：不適切な表現が含まれているため、回答できません。\n\n別の回答を選んでください。");
+        alert("⚠️ AI判定：不適切な表現が含まれているため、回答できません。");
         setIsJudging(false);
         return;
     }
@@ -557,6 +704,11 @@ export default function AiOgiriApp() {
     if (result) {
       setAiComment(result.comment);
       earnedScore = result.score;
+      
+      // 【学習】80点以上ならFirestoreへ保存
+      if (earnedScore >= HIGH_SCORE_THRESHOLD) {
+        saveLearnedAnswer(answerText);
+      }
     } else {
       earnedScore = Math.floor(Math.random() * 40) + 40;
       setAiComment(FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)]);
@@ -606,29 +758,13 @@ export default function AiOgiriApp() {
     setGamePhase('result');
   };
 
-  // --- UIコンポーネント: ランキング表示 ---
+  // --- UIコンポーネント ---
   const RankingList = ({ mode, data, unit }) => (
     <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
-      <div className="flex items-center gap-2 mb-3 font-bold text-slate-600">
-        <Crown className="w-4 h-4 text-yellow-500" />
-        <span>歴代トップ3</span>
-      </div>
+      <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
       {data && data.length > 0 ? (
-        <ul className="space-y-2 text-sm">
-          {data.map((rank, i) => (
-            <li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1">
-              <span className="font-bold text-slate-500 w-6">#{i+1}</span>
-              <span className="font-bold text-indigo-700">
-                {mode === 'time_attack' ? formatTime(rank.value) : rank.value}
-                <span className="text-xs text-slate-400 font-normal ml-1">{unit}</span>
-              </span>
-              <span className="text-xs text-slate-400">{rank.date}</span>
-            </li>
-          ))}
-        </ul>
-      ) : (
-        <p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>
-      )}
+        <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? formatTime(rank.value) : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
+      ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
     </div>
   );
 
@@ -644,19 +780,23 @@ export default function AiOgiriApp() {
                 <div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p><p className="text-sm">全{TOTAL_ROUNDS_SCORE_ATTACK}回戦の合計得点を競います。大喜利神を目指そう！</p></div>
                 <div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p><p className="text-sm">AI審査員から<span className="font-bold">{SURVIVAL_PASS_SCORE}点未満</span>を取ったら即終了。何連勝できるか挑戦！</p></div>
                 <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm">合計<span className="font-bold">{TIME_ATTACK_GOAL_SCORE}点</span>に到達するまでの速さを競います。</p></div>
+                <div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p><p className="text-sm">お題を自分で書くかAIに任せるか自由！ 心ゆくまで楽しめます。</p></div>
             </div>
           </section>
           <section>
             <h4 className="font-bold text-lg mb-2 flex items-center gap-2"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ（2人～）</h4>
             <ul className="list-disc list-inside text-sm space-y-1 bg-amber-50 p-3 rounded-xl"><li>1人が「親」、残りが「子（回答者）」になります。</li><li>スマホを回して、親はお題を決め、子は回答します。</li><li>全員回答後、親が一番面白い回答を選びます。</li><li><span className="font-bold text-red-500">注意！</span> 審査時にAIが作った<span className="font-bold">「ダミー回答」</span>が1つ混ざります。</li><li>親がダミーを選ぶと<span className="font-bold">親が-1点</span>！ 子を選ぶと<span className="font-bold">その子が+1点</span>です。</li></ul>
           </section>
+          
+          <div className="pt-4 border-t border-slate-200">
+             <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 p-2 rounded"><Brain className="w-4 h-4 text-indigo-500" /><span><span className="font-bold">AI学習機能:</span> あなたが作ったお題や、80点以上の面白い回答はクラウドに保存され、全ユーザーのAIが参考にします。</span></div>
+          </div>
         </div>
         <div className="mt-8 text-center"><button onClick={() => setShowRules(false)} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700 transition-colors">閉じる</button></div>
       </div>
     </div>
   );
 
-  // --- メインレンダリング ---
   const Card = ({ text, isSelected, onClick, disabled }) => (
     <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}`}>{text}</button>
   );
@@ -678,7 +818,7 @@ export default function AiOgiriApp() {
         <div className="grid gap-4 w-full max-w-md mb-8">
           <button onClick={() => { setGameConfig({ mode: 'single', singleMode: 'score_attack', playerCount: 1 }); setAppMode('setup'); }} className="flex items-center justify-center gap-3 p-5 bg-white border-2 border-slate-200 rounded-2xl hover:border-indigo-500 hover:shadow-md transition-all group text-left">
             <div className="bg-indigo-50 p-3 rounded-full group-hover:bg-indigo-100"><User className="w-6 h-6 text-indigo-600" /></div>
-            <div><div className="font-bold text-slate-900">一人で遊ぶ</div><div className="text-xs text-slate-500">3つのモードでAIに挑戦</div></div>
+            <div><div className="font-bold text-slate-900">一人で遊ぶ</div><div className="text-xs text-slate-500">4つのモードでAIに挑戦</div></div>
           </button>
           <button onClick={() => { setGameConfig({ mode: 'multi', playerCount: 3 }); setAppMode('setup'); }} className="flex items-center justify-center gap-3 p-5 bg-white border-2 border-slate-200 rounded-2xl hover:border-amber-500 hover:shadow-md transition-all group text-left">
             <div className="bg-amber-50 p-3 rounded-full group-hover:bg-amber-100"><Users className="w-6 h-6 text-amber-600" /></div>
@@ -703,6 +843,7 @@ export default function AiOgiriApp() {
                     <button onClick={() => setGameConfig(prev => ({...prev, singleMode: 'score_attack'}))} className={`w-full p-4 rounded-xl border-2 text-left flex items-center justify-between transition-all ${gameConfig.singleMode === 'score_attack' ? 'border-indigo-600 bg-indigo-50 ring-2 ring-indigo-200 shadow-md' : 'border-slate-200 hover:border-indigo-300 bg-white'}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${gameConfig.singleMode === 'score_attack' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Trophy className="w-5 h-5"/></div><div><div className={`font-bold ${gameConfig.singleMode === 'score_attack' ? 'text-indigo-900' : 'text-slate-900'}`}>スコアアタック</div><div className="text-xs text-slate-500">全{TOTAL_ROUNDS_SCORE_ATTACK}問の合計得点を競う</div></div></div>{gameConfig.singleMode === 'score_attack' && <Check className="w-6 h-6 text-indigo-600" />}</button>
                     <button onClick={() => setGameConfig(prev => ({...prev, singleMode: 'survival'}))} className={`w-full p-4 rounded-xl border-2 text-left flex items-center justify-between transition-all ${gameConfig.singleMode === 'survival' ? 'border-red-600 bg-red-50 ring-2 ring-red-200 shadow-md' : 'border-slate-200 hover:border-red-300 bg-white'}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${gameConfig.singleMode === 'survival' ? 'bg-red-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Skull className="w-5 h-5"/></div><div><div className={`font-bold ${gameConfig.singleMode === 'survival' ? 'text-red-900' : 'text-slate-900'}`}>サバイバル</div><div className="text-xs text-slate-500">{SURVIVAL_PASS_SCORE}点未満で即終了。連勝を目指せ</div></div></div>{gameConfig.singleMode === 'survival' && <Check className="w-6 h-6 text-red-600" />}</button>
                     <button onClick={() => setGameConfig(prev => ({...prev, singleMode: 'time_attack'}))} className={`w-full p-4 rounded-xl border-2 text-left flex items-center justify-between transition-all ${gameConfig.singleMode === 'time_attack' ? 'border-blue-600 bg-blue-50 ring-2 ring-blue-200 shadow-md' : 'border-slate-200 hover:border-blue-300 bg-white'}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${gameConfig.singleMode === 'time_attack' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Clock className="w-5 h-5"/></div><div><div className={`font-bold ${gameConfig.singleMode === 'time_attack' ? 'text-blue-900' : 'text-slate-900'}`}>タイムアタック</div><div className="text-xs text-slate-500">合計{TIME_ATTACK_GOAL_SCORE}点到達までのタイムを競う</div></div></div>{gameConfig.singleMode === 'time_attack' && <Check className="w-6 h-6 text-blue-600" />}</button>
+                    <button onClick={() => setGameConfig(prev => ({...prev, singleMode: 'freestyle'}))} className={`w-full p-4 rounded-xl border-2 text-left flex items-center justify-between transition-all ${gameConfig.singleMode === 'freestyle' ? 'border-green-600 bg-green-50 ring-2 ring-green-200 shadow-md' : 'border-slate-200 hover:border-green-300 bg-white'}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${gameConfig.singleMode === 'freestyle' ? 'bg-green-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Infinity className="w-5 h-5"/></div><div><div className={`font-bold ${gameConfig.singleMode === 'freestyle' ? 'text-green-900' : 'text-slate-900'}`}>フリースタイル</div><div className="text-xs text-slate-500">お題作成から楽しむ無限モード</div></div></div>{gameConfig.singleMode === 'freestyle' && <Check className="w-6 h-6 text-green-600" />}</button>
                 </div>
             </div>
           ) : (
@@ -758,12 +899,7 @@ export default function AiOgiriApp() {
         <h2 className="text-xl font-bold text-slate-500 mb-2">{resultTitle}</h2>
         <div className="text-6xl font-black text-indigo-600 mb-4">{resultMain}</div>
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 w-full max-w-sm mb-4"><p className="text-xl font-bold text-slate-800">{resultSub}</p></div>
-        
-        {/* ランキング表示 */}
-        <div className="w-full max-w-sm mb-8">
-          {rankingList}
-        </div>
-
+        <div className="w-full max-w-sm mb-8">{rankingList}</div>
         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700 shadow-xl transition-all active:scale-95">タイトルへ戻る</button>
       </div>
     );
@@ -774,7 +910,12 @@ export default function AiOgiriApp() {
       <header className="bg-white border-b border-slate-200 py-3 px-4 flex justify-between items-center sticky top-0 z-20">
         <div className="flex items-center gap-2"><MessageSquare className="text-indigo-600 w-5 h-5" /><h1 className="font-bold text-slate-800">AI大喜利</h1></div>
         <div className="flex gap-2 items-center">
-           {gameConfig.mode === 'single' && (<div className="text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-600 flex items-center gap-2">{gameConfig.singleMode === 'score_attack' && <span>Round {currentRound}/{TOTAL_ROUNDS_SCORE_ATTACK}</span>}{gameConfig.singleMode === 'survival' && <span className="text-red-600 flex items-center gap-1"><Skull className="w-3 h-3"/> {currentRound}連勝中</span>}{gameConfig.singleMode === 'time_attack' && <span className="text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3"/> {displayTime}</span>}</div>)}
+           {gameConfig.mode === 'single' && (<div className="text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-600 flex items-center gap-2">
+             {gameConfig.singleMode === 'score_attack' && <span>Round {currentRound}/{TOTAL_ROUNDS_SCORE_ATTACK}</span>}
+             {gameConfig.singleMode === 'survival' && <span className="text-red-600 flex items-center gap-1"><Skull className="w-3 h-3"/> {currentRound}連勝中</span>}
+             {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3"/> {displayTime}</span>}
+             {gameConfig.singleMode === 'freestyle' && <span className="text-green-600 flex items-center gap-1"><Infinity className="w-3 h-3"/> Round {currentRound}</span>}
+           </div>)}
            <div className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full ${isAiActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>{isAiActive ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}{isAiActive ? 'AI稼働中' : 'AIお休み'}</div>
            {players.length > 0 && gameConfig.mode === 'multi' && (<div className="text-xs bg-slate-100 px-2 py-1 rounded-full font-mono flex items-center mr-2 text-slate-900">親: {players[masterIndex].name}</div>)}
           <button onClick={handleBackToTitle} className="flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors"><Home className="w-4 h-4" />トップへ</button>
@@ -841,6 +982,8 @@ export default function AiOgiriApp() {
           <div className="animate-in zoom-in duration-300 pb-20">
             <div className="text-center mb-6"><div className="inline-flex p-4 bg-yellow-100 rounded-full mb-4 shadow-inner"><Trophy className="w-12 h-12 text-yellow-600" /></div><h2 className="text-3xl font-extrabold text-slate-900">{gameConfig.mode === 'single' ? `${selectedSubmission?.score}点！` : '勝者決定！'}</h2></div>
             <div className="bg-white rounded-3xl shadow-xl overflow-hidden mb-8 border border-slate-100"><div className="bg-slate-900 p-6 text-white text-center"><p className="text-indigo-300 text-sm font-bold mb-2 opacity-75">お題</p><p className="text-lg font-medium opacity-90">{currentTopic.replace('{placeholder}', '___')}</p></div><div className="p-8 text-center bg-gradient-to-b from-white to-slate-50"><p className="text-sm text-slate-400 font-bold mb-2">ベストアンサー</p><p className="text-3xl md:text-4xl font-black text-indigo-600 leading-tight mb-4">{selectedSubmission?.answerText}</p>{gameConfig.mode === 'single' ? (<div className="bg-slate-100 p-4 rounded-xl text-left inline-block max-w-sm"><div className="flex items-center gap-2 mb-1"><Sparkles className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-slate-500">AIコメント</span></div><p className="text-slate-700">「{aiComment}」</p>
+            {/* Feedback Buttons */}
+            <div className="mt-3 pt-3 border-t border-slate-200"><p className="text-xs text-slate-400 font-bold mb-2 text-center">このツッコミは...</p>{aiFeedback === null ? (<div className="flex justify-center gap-4"><button onClick={() => handleAiFeedback(true)} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors"><ThumbsUp className="w-3 h-3" /> ナイス！</button><button onClick={() => handleAiFeedback(false)} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"><ThumbsDown className="w-3 h-3" /> イマイチ</button></div>) : (<p className="text-xs text-center font-bold text-indigo-600 animate-in fade-in">{aiFeedback === 'good' ? 'ありがとうございます！😊' : '精進します...🙇'}</p>)}</div>
             {gameConfig.singleMode === 'survival' && isSurvivalGameOver && (<div className="mt-4 p-3 bg-red-100 text-red-700 font-bold rounded-lg animate-pulse">⚠️ {SURVIVAL_PASS_SCORE}点未満のため、ゲームオーバー！</div>)}
             {gameConfig.singleMode === 'time_attack' && finishTime && (<div className="mt-4 p-3 bg-blue-100 text-blue-700 font-bold rounded-lg animate-bounce">🎉 目標達成！ ゴール！</div>)}
             </div>) : (<div className="animate-bounce-in">
