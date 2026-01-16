@@ -63,6 +63,7 @@ export default function AiOgiriApp() {
   const [isAiActive, setIsAiActive] = useState(true);
   const [isCopied, setIsCopied] = useState(false);
   const [isJudging, setIsJudging] = useState(false); // 審査中フラグ
+  const [isCheckingTopic, setIsCheckingTopic] = useState(false); // お題チェック中フラグ
 
   const [cardDeck, setCardDeck] = useState([]);
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
@@ -134,6 +135,24 @@ export default function AiOgiriApp() {
     `;
     const result = await callGemini(prompt, "あなたは大喜利の司会者です。");
     return result?.topic || null;
+  };
+
+  // 新規追加: コンテンツの安全性チェック関数
+  const checkContentSafety = async (text) => {
+    // AIが無効な場合はチェックをスキップして通す（あるいは厳格にするなら弾く）
+    if (!isAiActive) return false;
+
+    const prompt = `
+      以下のテキストが、公序良俗に反する言葉、差別用語、過度な下ネタ、暴力的な表現、他人を不快にする誹謗中傷を含んでいるか判定してください。
+      大喜利のお題として許容できる範囲のユーモアならfalse、明らかに悪意がある・不快なものはtrueとしてください。
+      
+      テキスト: "${text}"
+      
+      出力はJSON形式で {"isInappropriate": trueまたはfalse} としてください。
+    `;
+    
+    const result = await callGemini(prompt, "あなたはコンテンツの安全性を判定するAIモデレーターです。");
+    return result?.isInappropriate || false;
   };
 
   const fetchAiCards = async (count = 10) => {
@@ -354,12 +373,27 @@ export default function AiOgiriApp() {
     setIsGeneratingTopic(false);
   };
 
-  const confirmTopic = () => {
+  // お題決定処理（安全性チェック追加）
+  const confirmTopic = async () => {
     if (!manualTopicInput.trim()) return;
+    
+    setIsCheckingTopic(true); // チェック開始
+
+    // 安全性チェック
+    const isUnsafe = await checkContentSafety(manualTopicInput);
+    if (isUnsafe) {
+        alert("⚠️ AI判定：お題に不適切な表現が含まれている可能性があります。\n\n表現を見直してください。");
+        setIsCheckingTopic(false);
+        return;
+    }
+
     let finalTopic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
     if (!topicsList.includes(finalTopic)) setTopicsList(prev => [...prev, finalTopic]);
     setCurrentTopic(finalTopic);
+    
+    setIsCheckingTopic(false); // チェック終了
+
     if (gameConfig.mode === 'single') setGamePhase('answer_input');
     else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
@@ -376,7 +410,6 @@ export default function AiOgiriApp() {
     setGamePhase('turn_change');
   };
 
-  // シングル回答 & AI審査（不適切チェック追加）
   const handleSingleSubmit = async (answerText) => {
     if (!answerText) return;
     
@@ -385,7 +418,7 @@ export default function AiOgiriApp() {
     // AI審査呼び出し
     const result = await fetchAiJudgment(currentTopic, answerText);
     
-    // 【重要】不適切判定ならアラートを出して中断
+    // 不適切判定ならアラートを出して中断
     if (result && result.isInappropriate) {
         alert("⚠️ AI判定：不適切な表現が含まれているため、回答できません。\n\n別の回答を選んでください。");
         setIsJudging(false);
@@ -406,10 +439,7 @@ export default function AiOgiriApp() {
     setGamePhase('result');
   };
 
-  // マルチ回答（※マルチも一応チェックを入れる場合はここに非同期処理が必要ですが、今回はシングルメインで実装）
   const handleMultiSubmit = async (answer) => {
-    // もしマルチでもNGワードチェックを入れたい場合は、ここに fetchAiJudgment を入れてチェックする
-    // 今回はテンポ重視でそのまま通します（または必要なら追加します）
     const newSubmissions = [...submissions, { playerId: players[turnPlayerIndex].id, answerText: answer }];
     setSubmissions(newSubmissions);
     const updatedPlayers = players.map(p => {
@@ -526,7 +556,7 @@ export default function AiOgiriApp() {
                 <textarea value={manualTopicInput} onChange={(e) => setManualTopicInput(e.target.value)} placeholder="ここにAIでお題を作るか、自分で入力してください...&#13;&#10;例：冷蔵庫を開けたら、なぜか ___ が冷やされていた。" className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[120px] mb-4 text-base leading-relaxed text-slate-900 placeholder:text-slate-400" />
               </div>
               <div className="bg-slate-50 p-3 rounded-lg text-xs text-slate-500 mb-4 border border-slate-100"><p className="font-bold mb-1 text-slate-600">💡 ヒント</p><span className="font-bold font-mono">___</span> (アンダーバー3つ) の部分に、みんなが回答カード（名詞）を出します。<br/>名詞がスポッと入るような穴埋め文章にすると盛り上がります。</div>
-              <button onClick={confirmTopic} disabled={!manualTopicInput.trim() || isGeneratingTopic} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95 shadow-md">このお題で決定</button>
+              <button onClick={confirmTopic} disabled={!manualTopicInput.trim() || isGeneratingTopic || isCheckingTopic} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95 shadow-md">{isCheckingTopic ? 'AIチェック中...' : 'このお題で決定'}</button>
             </div>
           </div>
         )}
