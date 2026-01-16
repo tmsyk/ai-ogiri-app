@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check } from 'lucide-react';
+import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle } from 'lucide-react';
 
 // --- フォールバック用データ ---
 const FALLBACK_TOPICS = [
@@ -54,6 +54,7 @@ const shuffleArray = (array) => {
 
 // --- メインコンポーネント ---
 export default function AiOgiriApp() {
+  // --- ステート管理 ---
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({
     mode: 'single', // 'single' | 'multi'
@@ -137,9 +138,7 @@ export default function AiOgiriApp() {
     return result?.topic || null;
   };
 
-  // 新規追加: コンテンツの安全性チェック関数
   const checkContentSafety = async (text) => {
-    // AIが無効な場合はチェックをスキップして通す
     if (!isAiActive) return false;
 
     const prompt = `
@@ -161,11 +160,7 @@ export default function AiOgiriApp() {
     
     const result = await callGemini(prompt, "あなたは厳格なコンテンツモデレーターです。");
     
-    // 【修正】結果がnull（AIが応答を拒否＝ブロックされた可能性がある）場合も不適切とみなす
-    if (result === null) {
-      return true;
-    }
-    
+    if (result === null) return true;
     return result?.isInappropriate || false;
   };
 
@@ -355,8 +350,13 @@ export default function AiOgiriApp() {
     if (gameConfig.mode === 'single') {
       startRoundProcess(players, 0);
     } else {
-      const winnerIndex = players.findIndex(p => p.id === selectedSubmission.playerId);
-      startRoundProcess(players, winnerIndex);
+      // ダミーを選んだ場合(親の負け)は親は継続、プレイヤーを選んだ場合(親の勝ち)はそのプレイヤーが次の親
+      if (selectedSubmission.isDummy) {
+         startRoundProcess(players, masterIndex);
+      } else {
+         const winnerIndex = players.findIndex(p => p.id === selectedSubmission.playerId);
+         startRoundProcess(players, winnerIndex);
+      }
     }
   };
 
@@ -387,29 +387,20 @@ export default function AiOgiriApp() {
     setIsGeneratingTopic(false);
   };
 
-  // お題決定処理（安全性チェック追加）
   const confirmTopic = async () => {
     if (!manualTopicInput.trim()) return;
-    
-    setIsCheckingTopic(true); // チェック開始
-
-    // 安全性チェック
+    setIsCheckingTopic(true);
     const isUnsafe = await checkContentSafety(manualTopicInput);
-    
-    // AIが「不適切」と判断した場合、ここでブロックして終了
     if (isUnsafe) {
         alert("⚠️ AI判定：お題に不適切な表現が含まれているため、使用できません。\n\n表現を見直して、健全なお題にしてください。");
         setIsCheckingTopic(false);
-        return; // ここでreturnすることで、画面遷移を防ぐ
+        return;
     }
-
     let finalTopic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
     if (!topicsList.includes(finalTopic)) setTopicsList(prev => [...prev, finalTopic]);
     setCurrentTopic(finalTopic);
-    
-    setIsCheckingTopic(false); // チェック終了
-
+    setIsCheckingTopic(false);
     if (gameConfig.mode === 'single') setGamePhase('answer_input');
     else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
@@ -426,24 +417,46 @@ export default function AiOgiriApp() {
     setGamePhase('turn_change');
   };
 
+  // マルチプレイ審査開始時にダミーを追加する処理
+  const startJudging = () => {
+    // ダミーカードを1枚デッキから引く
+    let dummyCard = "";
+    let newDeck = [...cardDeck];
+
+    if (newDeck.length > 0) {
+      const idx = Math.floor(Math.random() * newDeck.length);
+      dummyCard = newDeck[idx];
+      newDeck.splice(idx, 1);
+    } else {
+      dummyCard = FALLBACK_ANSWERS[Math.floor(Math.random() * FALLBACK_ANSWERS.length)];
+    }
+
+    setCardDeck(newDeck);
+
+    // 提出リストにダミーを追加
+    setSubmissions(prev => [
+      ...prev,
+      {
+        playerId: 'dummy',
+        answerText: dummyCard,
+        isDummy: true
+      }
+    ]);
+
+    setGamePhase('judging');
+  };
+
   const handleSingleSubmit = async (answerText) => {
     if (!answerText) return;
-    
-    setIsJudging(true); // 審査中ローディング開始
-
-    // AI審査呼び出し
+    setIsJudging(true);
     const result = await fetchAiJudgment(currentTopic, answerText);
-    
-    // 不適切判定ならアラートを出して中断
     if (result && result.isInappropriate) {
         alert("⚠️ AI判定：不適切な表現が含まれているため、回答できません。\n\n別の回答を選んでください。");
         setIsJudging(false);
-        return; // ここで処理を終了（手札も減らない）
+        return;
     }
-
     setSingleSelectedCard(answerText);
-    setGamePhase('judging'); // 演出画面へ
-    
+    setGamePhase('judging');
     if (result) {
       setAiComment(result.comment);
       setSelectedSubmission({ answerText: answerText, score: result.score });
@@ -467,12 +480,25 @@ export default function AiOgiriApp() {
     prepareNextSubmitter(turnPlayerIndex, masterIndex, updatedPlayers);
   };
 
+  // 判定ロジック修正
   const handleJudge = (submission) => {
     setSelectedSubmission(submission);
-    const winnerId = submission.playerId;
-    const updatedPlayers = players.map(p => 
-      p.id === winnerId ? { ...p, score: p.score + 1 } : p
-    );
+    
+    let updatedPlayers = [...players];
+
+    if (submission.isDummy) {
+      // ダミーを選んだ場合：親のスコア -1
+      updatedPlayers = updatedPlayers.map(p => 
+        p.id === players[masterIndex].id ? { ...p, score: p.score - 1 } : p
+      );
+    } else {
+      // プレイヤーを選んだ場合：そのプレイヤーのスコア +1
+      const winnerId = submission.playerId;
+      updatedPlayers = updatedPlayers.map(p => 
+        p.id === winnerId ? { ...p, score: p.score + 1 } : p
+      );
+    }
+    
     setPlayers(updatedPlayers);
     setGamePhase('result');
   };
@@ -583,7 +609,12 @@ export default function AiOgiriApp() {
               <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 text-amber-600">{turnPlayerIndex === masterIndex ? <Eye className="w-8 h-8" /> : <PenTool className="w-8 h-8" />}</div>
               <h2 className="text-2xl font-bold text-slate-800 mb-2">次は {players[turnPlayerIndex].name} さんの番です</h2>
               <p className="text-slate-500 mb-8">{turnPlayerIndex === masterIndex ? '全員の回答が出揃いました！親に端末を渡してください。' : '他の人に見えないように端末を受け取ってください。'}</p>
-              <button onClick={() => setGamePhase(turnPlayerIndex === masterIndex ? 'judging' : 'answer_input')} className="w-full py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transform transition active:scale-95">{turnPlayerIndex === masterIndex ? '審査を始める' : '回答する'}</button>
+              <button 
+                onClick={() => turnPlayerIndex === masterIndex ? startJudging() : setGamePhase('answer_input')} 
+                className="w-full py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transform transition active:scale-95"
+              >
+                {turnPlayerIndex === masterIndex ? '審査を始める（ダミーが混ざります！）' : '回答する'}
+              </button>
             </div>
           </div>
         )}
@@ -615,7 +646,13 @@ export default function AiOgiriApp() {
         {gamePhase === 'result' && (
           <div className="animate-in zoom-in duration-300 pb-20">
             <div className="text-center mb-6"><div className="inline-flex p-4 bg-yellow-100 rounded-full mb-4 shadow-inner"><Trophy className="w-12 h-12 text-yellow-600" /></div><h2 className="text-3xl font-extrabold text-slate-900">{gameConfig.mode === 'single' ? `${selectedSubmission?.score}点！` : '勝者決定！'}</h2></div>
-            <div className="bg-white rounded-3xl shadow-xl overflow-hidden mb-8 border border-slate-100"><div className="bg-slate-900 p-6 text-white text-center"><p className="text-indigo-300 text-sm font-bold mb-2 opacity-75">お題</p><p className="text-lg font-medium opacity-90">{currentTopic.replace('{placeholder}', '___')}</p></div><div className="p-8 text-center bg-gradient-to-b from-white to-slate-50"><p className="text-sm text-slate-400 font-bold mb-2">ベストアンサー</p><p className="text-3xl md:text-4xl font-black text-indigo-600 leading-tight mb-4">{selectedSubmission?.answerText}</p>{gameConfig.mode === 'single' ? (<div className="bg-slate-100 p-4 rounded-xl text-left inline-block max-w-sm"><div className="flex items-center gap-2 mb-1"><Sparkles className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-slate-500">AIコメント</span></div><p className="text-slate-700">「{aiComment}」</p></div>) : (<div className="animate-bounce-in"><p className="text-sm text-slate-400">by</p><p className="text-xl font-bold text-slate-800">{players.find(p => p.id === selectedSubmission?.playerId)?.name}</p><div className="mt-4 inline-block bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-1 rounded-full">次回の親になります</div></div>)}
+            <div className="bg-white rounded-3xl shadow-xl overflow-hidden mb-8 border border-slate-100"><div className="bg-slate-900 p-6 text-white text-center"><p className="text-indigo-300 text-sm font-bold mb-2 opacity-75">お題</p><p className="text-lg font-medium opacity-90">{currentTopic.replace('{placeholder}', '___')}</p></div><div className="p-8 text-center bg-gradient-to-b from-white to-slate-50"><p className="text-sm text-slate-400 font-bold mb-2">ベストアンサー</p><p className="text-3xl md:text-4xl font-black text-indigo-600 leading-tight mb-4">{selectedSubmission?.answerText}</p>{gameConfig.mode === 'single' ? (<div className="bg-slate-100 p-4 rounded-xl text-left inline-block max-w-sm"><div className="flex items-center gap-2 mb-1"><Sparkles className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-slate-500">AIコメント</span></div><p className="text-slate-700">「{aiComment}」</p></div>) : (<div className="animate-bounce-in">
+              {selectedSubmission.isDummy ? (
+                <div className="bg-red-50 p-4 rounded-xl border border-red-200 inline-block"><div className="flex items-center gap-2 justify-center text-red-600 font-bold mb-2"><AlertTriangle className="w-6 h-6" /><span>残念！！</span></div><p className="text-slate-700">それは<span className="font-bold text-red-600">AIが作ったダミー回答</span>でした！</p><p className="text-sm text-slate-500 mt-1">見る目がない親は<span className="font-bold text-red-600 text-lg"> -1点 </span>です！</p></div>
+              ) : (
+                <><p className="text-sm text-slate-400">by</p><p className="text-xl font-bold text-slate-800">{players.find(p => p.id === selectedSubmission?.playerId)?.name}</p><div className="mt-4 inline-block bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-1 rounded-full">次回の親になります</div></>
+              )}
+            </div>)}
             {/* シェアボタン */}
             <div className="mt-8">
                <button onClick={handleShare} className="flex items-center gap-2 mx-auto px-6 py-3 bg-indigo-50 text-indigo-700 rounded-full font-bold hover:bg-indigo-100 transition-all active:scale-95">
