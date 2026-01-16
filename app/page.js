@@ -64,7 +64,6 @@ export default function AiOgiriApp() {
   const [isAiActive, setIsAiActive] = useState(true);
 
   // カードプール（デッキ）
-  // 初期値は空にしておき、ロード時にAIまたはフォールバックを入れる
   const [cardDeck, setCardDeck] = useState([]);
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   
@@ -85,7 +84,7 @@ export default function AiOgiriApp() {
 
   // 回答フェーズ用
   const [manualAnswerInput, setManualAnswerInput] = useState('');
-  const [isGeneratingAnswer, setIsGeneratingAnswer] = useState(false);
+  // ユーザーの要望により、AI回答作成機能は削除
   
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmission, setSelectedSubmission] = useState(null);
@@ -121,10 +120,16 @@ export default function AiOgiriApp() {
       
       if (!text) return null;
 
-      // 【修正ポイント】Markdownのコードブロック記号を除去して純粋なJSONにする
-      text = text.replace(/```json/g, "").replace(/```/g, "").trim();
-
-      return JSON.parse(text);
+      // 【修正】JSON部分だけを強力に抽出する
+      // AIが ```json ... ``` で囲んだり、前後に文章を入れたりする場合に対応
+      const jsonMatch = text.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        return JSON.parse(jsonMatch[0]);
+      } else {
+        // マッチしない場合、従来のクリーンアップを試す
+        text = text.replace(/```json/g, "").replace(/```/g, "").trim();
+        return JSON.parse(text);
+      }
     } catch (error) {
       console.error("Gemini API Error:", error);
       return null;
@@ -154,24 +159,13 @@ export default function AiOgiriApp() {
       
       条件:
       1. シュール、面白い、少し自虐的、または全く無関係な名詞など、バラエティ豊かにすること。
-      2. 毎回違う種類の単語を選ぶこと。
+      2. 毎回必ず違う種類の単語を選ぶこと。既存のありふれた回答は避けること。
       3. 基本的に「体言止め」できる名詞や名詞句にすること。
       4. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} とすること。
     `;
     
     const result = await callGemini(prompt, "あなたはユーモアのセンスがある構成作家です。");
     return result?.answers || null;
-  };
-
-  const fetchAiSingleAnswer = async (topic) => {
-    const prompt = `
-      以下のお題に対する、面白くてシュールな回答（ボケ）を1つ作成してください。
-      お題: ${topic}
-      出力はJSON形式で {"answer": "回答テキスト"} とすること。
-    `;
-    
-    const result = await callGemini(prompt, "あなたは大喜利の達人です。");
-    return result?.answer || null;
   };
 
   const fetchAiJudgment = async (topic, answer) => {
@@ -203,25 +197,9 @@ export default function AiOgiriApp() {
     }
   };
 
-  // 初期ロード時にAIカードを補充
+  // デッキが少なくなったら補充（ゲーム中の補充用）
   useEffect(() => {
-    // 初回のみ実行
-    if (isAiActive && cardDeck.length === 0) {
-        // まずはフォールバックで初期化して即座に遊べるようにしつつ
-        setCardDeck(shuffleArray([...FALLBACK_ANSWERS]));
-        
-        // 裏でAIカードを生成して追加する
-        fetchAiCards(20).then(aiCards => {
-            if (aiCards) {
-                addCardsToDeck(aiCards);
-            }
-        });
-    }
-  }, []);
-
-  // デッキが少なくなったら補充
-  useEffect(() => {
-    if (isAiActive && cardDeck.length < 15) {
+    if (isAiActive && cardDeck.length < 15 && cardDeck.length > 0) {
       fetchAiCards(15).then(newCards => {
         if (newCards) {
           addCardsToDeck(newCards);
@@ -234,34 +212,66 @@ export default function AiOgiriApp() {
 
   const initGame = async () => {
     setAppMode('game');
-    setGamePhase('drawing');
+    setGamePhase('drawing'); // 準備中画面へ
 
-    // プレイヤー初期化
-    let initialPlayers = [];
+    // 【修正】ここでまずAIカード生成を待つ
+    // 初期デッキとして30枚ほど確保を試みる
+    let initialDeck = [];
     
-    // デッキの状態を確認・補充
-    let currentDeck = [...cardDeck];
-    
-    // もしデッキが空（APIエラー等）ならフォールバックで埋める
-    if (currentDeck.length < 10) {
-       currentDeck = shuffleArray([...FALLBACK_ANSWERS]);
-       setCardDeck(currentDeck);
+    if (isAiActive) {
+      try {
+        const aiCards = await fetchAiCards(30);
+        if (aiCards && aiCards.length > 0) {
+          // AIカードが取得できたらそれをデッキにする
+          initialDeck = aiCards;
+          // 重複チェック用セットにも追加
+          aiCards.forEach(c => usedCardsRef.current.add(c));
+        }
+      } catch (e) {
+        console.error("Initial card generation failed");
+      }
     }
+
+    // AI生成に失敗、またはAI無効ならフォールバックを使用
+    if (initialDeck.length === 0) {
+      initialDeck = shuffleArray([...FALLBACK_ANSWERS]);
+    }
+
+    setCardDeck(initialDeck);
+
+    // プレイヤー初期化と手札配布
+    let initialPlayers = [];
+    let currentDeck = [...initialDeck]; // 配布用にローカル変数で操作
+
+    // 手札を配る関数（ローカルのデッキから引く）
+    const drawInitialHand = (deck, count) => {
+        const hand = [];
+        for (let i = 0; i < count; i++) {
+            if (deck.length > 0) {
+                const idx = Math.floor(Math.random() * deck.length);
+                hand.push(deck[idx]);
+                deck.splice(idx, 1);
+            } else {
+                // デッキが尽きたらフォールバックから補充
+                hand.push(FALLBACK_ANSWERS[Math.floor(Math.random() * FALLBACK_ANSWERS.length)]);
+            }
+        }
+        return { hand, remainingDeck: deck };
+    };
     
     if (gameConfig.mode === 'single') {
-      const { hand, remainingDeck } = drawCards(currentDeck, 7);
+      const { hand, remainingDeck } = drawInitialHand(currentDeck, 7);
       setSinglePlayerHand(hand);
-      setCardDeck(remainingDeck);
+      currentDeck = remainingDeck;
       
       initialPlayers = [
         { id: 0, name: 'あなた', score: 0, hand: hand },
         { id: 'ai', name: 'AI審査員', score: 0, hand: [] }
       ];
     } else {
-      let tempDeck = [...currentDeck];
       for (let i = 0; i < gameConfig.playerCount; i++) {
-        const { hand, remainingDeck } = drawCards(tempDeck, 7);
-        tempDeck = remainingDeck;
+        const { hand, remainingDeck } = drawInitialHand(currentDeck, 7);
+        currentDeck = remainingDeck;
         initialPlayers.push({ 
           id: i, 
           name: `プレイヤー${i + 1}`, 
@@ -269,17 +279,20 @@ export default function AiOgiriApp() {
           hand: hand 
         });
       }
-      setCardDeck(tempDeck);
     }
     
+    setCardDeck(currentDeck); // 残ったデッキを保存
     setPlayers(initialPlayers);
     setMasterIndex(0);
     setSubmissions([]);
     
     // 最初のラウンド開始
-    startRoundProcess(initialPlayers, 0);
+    setTimeout(() => {
+        startRoundProcess(initialPlayers, 0);
+    }, 500);
   };
 
+  // ゲーム中の追加ドロー用
   const drawCards = (deck, count) => {
     const needed = Math.max(0, count);
     if (needed === 0) return { hand: [], remainingDeck: deck };
@@ -374,18 +387,6 @@ export default function AiOgiriApp() {
     const displayTopic = newTopic.replace(/\{placeholder\}/g, "___");
     setManualTopicInput(displayTopic);
     setIsGeneratingTopic(false);
-  };
-
-  const generateAiAnswer = async () => {
-    if (isGeneratingAnswer) return;
-    setIsGeneratingAnswer(true);
-
-    let newAnswer = await fetchAiSingleAnswer(currentTopic);
-    if (!newAnswer) {
-        newAnswer = FALLBACK_ANSWERS[Math.floor(Math.random() * FALLBACK_ANSWERS.length)];
-    }
-    setManualAnswerInput(newAnswer);
-    setIsGeneratingAnswer(false);
   };
 
   const confirmTopic = () => {
@@ -565,7 +566,7 @@ export default function AiOgiriApp() {
             <p className="mb-2 font-bold text-slate-700">遊び方</p>
             <ul className="list-disc list-inside space-y-1">
               <li>お題はAIが作成したものを自由に編集できます。</li>
-              <li>回答もAIに作成させたり、自分で書いたり自由に選べます。</li>
+              <li>回答は配られた手札から選ぶか、自分で書くか選べます。</li>
               <li>入力された新しいお題は、ゲーム中にAIが学習します。</li>
             </ul>
           </div>
@@ -620,7 +621,7 @@ export default function AiOgiriApp() {
           <div className="flex flex-col items-center justify-center py-20 animate-pulse">
             <RefreshCw className="w-10 h-10 text-indigo-400 animate-spin mb-4" />
             <p className="text-slate-500 font-bold">準備中...</p>
-            <p className="text-xs text-slate-400 mt-2">AIがカードを準備しています</p>
+            <p className="text-xs text-slate-400 mt-2">AIがカードを生成しています...</p>
           </div>
         )}
 
@@ -736,23 +737,8 @@ export default function AiOgiriApp() {
             <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10">
               <div className="flex items-center justify-between mb-2">
                   <p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p>
-                  {isAiActive && (
-                    <button 
-                      onClick={generateAiAnswer}
-                      disabled={isGeneratingAnswer}
-                      className="flex items-center gap-1 px-2 py-1 bg-indigo-50 text-indigo-600 rounded text-[10px] font-bold hover:bg-indigo-100 transition-colors disabled:opacity-50"
-                    >
-                      <Wand2 className={`w-3 h-3 ${isGeneratingAnswer ? 'animate-spin' : ''}`} />
-                      AIで回答案を作成
-                   </button>
-                  )}
               </div>
               <div className="relative">
-                 {isGeneratingAnswer && (
-                    <div className="absolute inset-0 bg-white/50 z-10 flex items-center justify-center">
-                        <RefreshCw className="w-6 h-6 text-indigo-500 animate-spin" />
-                    </div>
-                 )}
                  <textarea
                     value={manualAnswerInput}
                     onChange={(e) => setManualAnswerInput(e.target.value)}
@@ -766,7 +752,7 @@ export default function AiOgiriApp() {
                    if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput);
                    else handleMultiSubmit(manualAnswerInput);
                 }}
-                disabled={!manualAnswerInput.trim() || isGeneratingAnswer}
+                disabled={!manualAnswerInput.trim()}
                 className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95"
               >
                 送信する
