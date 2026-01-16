@@ -17,12 +17,13 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 // --- ★重要★ Firebase設定 ---------------------------------------
 // 手順1でコピーした内容に書き換えてください
 const userFirebaseConfig = {
-  apiKey: "AIzaSy...",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT_ID",
-  storageBucket: "YOUR_PROJECT.appspot.com",
-  messagingSenderId: "...",
-  appId: "..."
+  apiKey: "AIzaSyADNa2ix6NWLt-EEtIbDVTs6qsXsnubn8Y",
+  authDomain: "ai-ogiri-app-2026-tmsyk.firebaseapp.com",
+  projectId: "ai-ogiri-app-2026-tmsyk",
+  storageBucket: "ai-ogiri-app-2026-tmsyk.firebasestorage.app",
+  messagingSenderId: "9612204174",
+  appId: "1:9612204174:web:7f1d36e12cd2d673da11df",
+  measurementId: "G-LW7C3ZSNKD"
 };
 // ---------------------------------------------------------------
 
