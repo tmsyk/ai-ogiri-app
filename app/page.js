@@ -444,10 +444,10 @@ export default function AiOgiriApp() {
       className={`
         relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm
         flex items-center justify-center text-center h-24 w-full
-        text-sm font-bold leading-snug break-words overflow-hidden
+        text-sm font-bold leading-snug break-words overflow-hidden text-slate-800
         ${isSelected 
           ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' 
-          : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'
+          : 'bg-white hover:bg-slate-50 border-slate-200'
         }
         ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}
       `}
@@ -479,7 +479,7 @@ export default function AiOgiriApp() {
 
   if (appMode === 'title') {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500">
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500 text-slate-900">
         <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mb-6">
           <Sparkles className="w-10 h-10 text-indigo-600" />
         </div>
@@ -525,7 +525,7 @@ export default function AiOgiriApp() {
 
   if (appMode === 'setup') {
     return (
-      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 animate-in slide-in-from-right duration-300">
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 animate-in slide-in-from-right duration-300 text-slate-900">
         <h2 className="text-2xl font-bold mb-8">ゲーム設定</h2>
         
         <div className="w-full max-w-md space-y-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
@@ -558,7 +558,7 @@ export default function AiOgiriApp() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 font-sans pb-24">
+    <div className="min-h-screen bg-slate-50 font-sans pb-24 text-slate-900">
       <header className="bg-white border-b border-slate-200 py-3 px-4 flex justify-between items-center sticky top-0 z-20">
         <div className="flex items-center gap-2">
           <MessageSquare className="text-indigo-600 w-5 h-5" />
@@ -566,7 +566,7 @@ export default function AiOgiriApp() {
         </div>
         <div className="flex gap-2 items-center">
            {players.length > 0 && gameConfig.mode === 'multi' && (
-             <div className="text-xs bg-slate-100 px-2 py-1 rounded-full font-mono flex items-center mr-2">親: {players[masterIndex].name}</div>
+             <div className="text-xs bg-slate-100 px-2 py-1 rounded-full font-mono flex items-center mr-2 text-slate-900">親: {players[masterIndex].name}</div>
            )}
           <button 
             onClick={handleBackToTitle}
@@ -623,7 +623,7 @@ export default function AiOgiriApp() {
                   value={manualTopicInput}
                   onChange={(e) => setManualTopicInput(e.target.value)}
                   placeholder="ここにAIでお題を作るか、自分で入力してください...&#13;&#10;例：冷蔵庫を開けたら、なぜか ___ が冷やされていた。"
-                  className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[120px] mb-4 text-base leading-relaxed"
+                  className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[120px] mb-4 text-base leading-relaxed text-slate-900 placeholder:text-slate-400"
                 />
               </div>
               
@@ -717,7 +717,7 @@ export default function AiOgiriApp() {
                     value={manualAnswerInput}
                     onChange={(e) => setManualAnswerInput(e.target.value)}
                     placeholder="ここに面白い回答を入力..."
-                    className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[80px] mb-3 text-lg"
+                    className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[80px] mb-3 text-lg text-slate-900 placeholder:text-slate-400"
                  />
               </div>
               <button 
@@ -758,7 +758,7 @@ export default function AiOgiriApp() {
                     <button
                       key={idx}
                       onClick={() => handleJudge(sub)}
-                      className="w-full p-6 text-lg font-bold bg-white border-2 border-slate-200 rounded-xl hover:border-amber-500 hover:bg-amber-50 hover:shadow-md transition-all text-left relative overflow-hidden group"
+                      className="w-full p-6 text-lg font-bold bg-white border-2 border-slate-200 rounded-xl hover:border-amber-500 hover:bg-amber-50 hover:shadow-md transition-all text-left relative overflow-hidden group text-slate-900"
                     >
                       <span className="relative z-10">{sub.answerText}</span>
                       <div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"><ThumbsUp className="text-amber-500" /></div>
