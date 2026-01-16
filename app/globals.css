@@ -2,16 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ここから下を追加 */
-
 /* ブラウザに対して「このサイトはライトモード専用です」と宣言 */
 :root {
   color-scheme: light;
 }
-
-/* 背景色と文字色を強制的に指定 */
-body {
-  background-color: #f8fafc; /* 薄いグレー（slate-50相当） */
-  color: #0f172a; /* 濃い紺色（slate-900相当） */
-}
-```
