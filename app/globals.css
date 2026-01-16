@@ -1,8 +1,3 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
-/* ブラウザに対して「このサイトはライトモード専用です」と宣言 */
-:root {
-  color-scheme: light;
-}
