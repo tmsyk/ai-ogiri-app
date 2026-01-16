@@ -54,7 +54,6 @@ const shuffleArray = (array) => {
 
 // --- メインコンポーネント ---
 export default function AiOgiriApp() {
-  // --- ステート管理 ---
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({
     mode: 'single', // 'single' | 'multi'
@@ -63,6 +62,7 @@ export default function AiOgiriApp() {
 
   const [isAiActive, setIsAiActive] = useState(true);
   const [isCopied, setIsCopied] = useState(false);
+  const [isJudging, setIsJudging] = useState(false); // 審査中フラグ
 
   const [cardDeck, setCardDeck] = useState([]);
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
@@ -156,14 +156,17 @@ export default function AiOgiriApp() {
       回答: ${answer}
       
       条件:
-      1. 面白さ、意外性、文脈のマッチ度を基準に0〜100点で採点してください。
-      2. まるでバラエティ番組の司会者のような、気が利いたツッコミや、思わず笑ってしまうようなコメント（50文字以内）を付けてください。
-      3. ただ褒めるだけでなく、ボケの角度に応じたリアクションをお願いします。
-      4. 出力はJSON形式で {"score": 点数(数値), "comment": "コメント"} とすること。
+      1. まず回答内容を厳しくチェックしてください。**公序良俗に反する言葉、差別用語、過度な下ネタ、暴力的な表現、他人を不快にする誹謗中傷**が含まれている場合は、面白さに関わらず「不適切」と判定してください。
+      2. 不適切な場合は、isInappropriate を true にしてください。
+      
+      3. 不適切でない場合は、面白さ、意外性、文脈のマッチ度を基準に0〜100点で採点してください。
+      4. バラエティ番組の司会者のような、気が利いたツッコミや笑えるコメント（50文字以内）を付けてください。
+      
+      出力はJSON形式で以下のようにしてください。
+      {"score": 点数(数値), "comment": "コメント", "isInappropriate": trueまたはfalse}
     `;
     
-    // 【修正】ここを「辛口」から「お笑いセンス抜群」に変更
-    const result = await callGemini(prompt, "あなたはお笑いセンス抜群の大喜利審査員です。回答に対して、笑いを誘うような、気が利いたナイスなツッコミを入れてください。");
+    const result = await callGemini(prompt, "あなたはお笑いセンス抜群の大喜利審査員ですが、コンプライアンスには非常に厳しい一面も持っています。");
     return result || null;
   };
 
@@ -373,11 +376,25 @@ export default function AiOgiriApp() {
     setGamePhase('turn_change');
   };
 
+  // シングル回答 & AI審査（不適切チェック追加）
   const handleSingleSubmit = async (answerText) => {
     if (!answerText) return;
-    setSingleSelectedCard(answerText);
-    setGamePhase('judging');
+    
+    setIsJudging(true); // 審査中ローディング開始
+
+    // AI審査呼び出し
     const result = await fetchAiJudgment(currentTopic, answerText);
+    
+    // 【重要】不適切判定ならアラートを出して中断
+    if (result && result.isInappropriate) {
+        alert("⚠️ AI判定：不適切な表現が含まれているため、回答できません。\n\n別の回答を選んでください。");
+        setIsJudging(false);
+        return; // ここで処理を終了（手札も減らない）
+    }
+
+    setSingleSelectedCard(answerText);
+    setGamePhase('judging'); // 演出画面へ
+    
     if (result) {
       setAiComment(result.comment);
       setSelectedSubmission({ answerText: answerText, score: result.score });
@@ -385,10 +402,14 @@ export default function AiOgiriApp() {
       setAiComment(FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)]);
       setSelectedSubmission({ answerText: answerText, score: Math.floor(Math.random() * 40) + 40 });
     }
+    setIsJudging(false);
     setGamePhase('result');
   };
 
-  const handleMultiSubmit = (answer) => {
+  // マルチ回答（※マルチも一応チェックを入れる場合はここに非同期処理が必要ですが、今回はシングルメインで実装）
+  const handleMultiSubmit = async (answer) => {
+    // もしマルチでもNGワードチェックを入れたい場合は、ここに fetchAiJudgment を入れてチェックする
+    // 今回はテンポ重視でそのまま通します（または必要なら追加します）
     const newSubmissions = [...submissions, { playerId: players[turnPlayerIndex].id, answerText: answer }];
     setSubmissions(newSubmissions);
     const updatedPlayers = players.map(p => {
@@ -527,7 +548,7 @@ export default function AiOgiriApp() {
             <div className="mb-2"><span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">PLAYER</span><h3 className="text-lg font-bold text-slate-800 inline-block ml-2">{gameConfig.mode === 'single' ? 'あなたの回答' : `${players[turnPlayerIndex].name}の回答`}</h3></div>
             <div className="mb-6"><p className="text-xs text-slate-400 mb-2 font-bold flex items-center gap-1"><Layers className="w-3 h-3" />手札から選んで回答</p><div className="grid grid-cols-2 gap-3">{(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((card, idx) => (<Card key={idx} text={card} onClick={() => { if (gameConfig.mode === 'single') handleSingleSubmit(card); else { if (window.confirm(`「${card}」で回答しますか？`)) handleMultiSubmit(card); }}} />))}</div></div>
             <div className="flex items-center gap-4 text-slate-300 mb-6"><div className="h-px bg-slate-200 flex-1"></div><ArrowDown className="w-4 h-4 text-slate-300" /><div className="h-px bg-slate-200 flex-1"></div></div>
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[80px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim()} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">送信する</button></div>
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[80px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim() || isJudging} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">{isJudging ? 'AIが審査中...' : '送信する'}</button></div>
           </div>
         )}
 
