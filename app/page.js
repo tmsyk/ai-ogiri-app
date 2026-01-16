@@ -1,8 +1,15 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain } from 'lucide-react';
-// Firebaseの機能をインポート
+// 必要なアイコンを全てインポート
+import { 
+  RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, 
+  RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, 
+  Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, 
+  X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain 
+} from 'lucide-react';
+
+// Firebase関連のインポート
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
@@ -10,52 +17,50 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 // --- ★重要★ Firebase設定 ---------------------------------------
 // 手順1でコピーした内容に書き換えてください
 const userFirebaseConfig = {
- apiKey: "AIzaSyADNa2ix6NWLt-EEtIbDVTs6qsXsnubn8Y",
-  authDomain: "ai-ogiri-app-2026-tmsyk.firebaseapp.com",
-  projectId: "ai-ogiri-app-2026-tmsyk",
-  storageBucket: "ai-ogiri-app-2026-tmsyk.firebasestorage.app",
-  messagingSenderId: "9612204174",
-  appId: "1:9612204174:web:7f1d36e12cd2d673da11df",
-  measurementId: "G-LW7C3ZSNKD"
+  apiKey: "AIzaSy...",
+  authDomain: "YOUR_PROJECT.firebaseapp.com",
+  projectId: "YOUR_PROJECT_ID",
+  storageBucket: "YOUR_PROJECT.appspot.com",
+  messagingSenderId: "...",
+  appId: "..."
 };
 // ---------------------------------------------------------------
 
-// Firebase初期化ロジック
+// Firebase初期化ロジック（エラーガード付き）
 let app, auth, db;
 try {
-  // Canvas環境かVercel環境かを判定してConfigを使い分ける
   const config = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : userFirebaseConfig;
   
-  if (!getApps().length) {
-    app = initializeApp(config);
+  // Configの中身があるか簡易チェック
+  if (config && config.apiKey && config.apiKey !== "AIzaSy...") {
+      if (!getApps().length) {
+        app = initializeApp(config);
+      } else {
+        app = getApp();
+      }
+      auth = getAuth(app);
+      db = getFirestore(app);
   } else {
-    app = getApp();
+      console.warn("Firebase config is missing or placeholder. Running in offline mode.");
   }
-  auth = getAuth(app);
-  db = getFirestore(app);
 } catch (e) {
   console.error("Firebase init error:", e);
 }
 
-// コレクションパス取得ヘルパー（環境によるパスの違いを吸収）
-const getCollectionRef = (collectionName) => {
-  if (typeof __app_id !== 'undefined') {
-    // Canvas環境用
-    return collection(db, 'artifacts', __app_id, 'public', 'data', collectionName);
-  } else {
-    // Vercel(本番)環境用：ルートに作る
-    return collection(db, collectionName);
-  }
-};
-
+// ドキュメント参照ヘルパー
 const getDocRef = (collectionName, docId) => {
-    if (typeof __app_id !== 'undefined') {
-        return doc(db, 'artifacts', __app_id, 'public', 'data', collectionName, docId);
-    } else {
-        return doc(db, collectionName, docId);
+    if (!db) return null;
+    try {
+        if (typeof __app_id !== 'undefined') {
+            return doc(db, 'artifacts', __app_id, 'public', 'data', collectionName, docId);
+        } else {
+            return doc(db, collectionName, docId);
+        }
+    } catch (e) {
+        console.error("Error creating doc ref:", e);
+        return null;
     }
 };
-
 
 // --- フォールバック用データ ---
 const FALLBACK_TOPICS = [
@@ -134,10 +139,8 @@ export default function AiOgiriApp() {
   const [isJudging, setIsJudging] = useState(false);
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [showRules, setShowRules] = useState(false);
-  
   const [aiFeedback, setAiFeedback] = useState(null);
 
-  // Firestoreから取得する共有データ
   const [learnedData, setLearnedData] = useState({
     topics: [],
     goodAnswers: []
@@ -178,14 +181,14 @@ export default function AiOgiriApp() {
   const [singleSelectedCard, setSingleSelectedCard] = useState(null);
 
   // --- Firebase Auth & Firestore同期 ---
-  
   useEffect(() => {
-    // 1. 匿名認証
+    if (!auth) return;
+
     const initAuth = async () => {
         try {
             await signInAnonymously(auth);
         } catch (error) {
-            console.error("Auth Error", error);
+            console.error("Auth Error (Offline mode):", error);
         }
     };
     initAuth();
@@ -198,73 +201,72 @@ export default function AiOgiriApp() {
   }, []);
 
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUser || !db) return;
 
-    // 2. 学習データのリアルタイム同期
-    const learnedDocRef = getDocRef('shared_db', 'learned_data');
-    const unsubLearned = onSnapshot(learnedDocRef, (docSnap) => {
-        if (docSnap.exists()) {
-            const data = docSnap.data();
-            setLearnedData({
-                topics: data.topics || [],
-                goodAnswers: data.goodAnswers || []
-            });
-            // 学習したお題を候補に追加
-            if (data.topics && data.topics.length > 0) {
-                setTopicsList(prev => {
-                    const merged = [...FALLBACK_TOPICS, ...data.topics];
-                    return Array.from(new Set(merged));
-                });
-            }
-        } else {
-            // 初回作成
-            setDoc(learnedDocRef, { topics: [], goodAnswers: [] });
+    try {
+        const learnedDocRef = getDocRef('shared_db', 'learned_data');
+        if (learnedDocRef) {
+            const unsubLearned = onSnapshot(learnedDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    setLearnedData({
+                        topics: data.topics || [],
+                        goodAnswers: data.goodAnswers || []
+                    });
+                    if (data.topics && data.topics.length > 0) {
+                        setTopicsList(prev => {
+                            const merged = [...FALLBACK_TOPICS, ...data.topics];
+                            return Array.from(new Set(merged));
+                        });
+                    }
+                } else {
+                    setDoc(learnedDocRef, { topics: [], goodAnswers: [] }).catch(e => console.warn("Firestore write failed (offline?)", e));
+                }
+            }, (error) => console.warn("Firestore sync error (learned):", error));
+
+            const rankingDocRef = getDocRef('shared_db', 'rankings');
+            const unsubRankings = onSnapshot(rankingDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    setRankings(docSnap.data());
+                } else {
+                    setDoc(rankingDocRef, { score_attack: [], survival: [], time_attack: [] }).catch(e => console.warn("Firestore write failed (offline?)", e));
+                }
+            }, (error) => console.warn("Firestore sync error (rankings):", error));
+
+            return () => {
+                unsubLearned();
+                unsubRankings();
+            };
         }
-    });
-
-    // 3. ランキングのリアルタイム同期
-    const rankingDocRef = getDocRef('shared_db', 'rankings');
-    const unsubRankings = onSnapshot(rankingDocRef, (docSnap) => {
-        if (docSnap.exists()) {
-            setRankings(docSnap.data());
-        } else {
-            setDoc(rankingDocRef, { score_attack: [], survival: [], time_attack: [] });
-        }
-    });
-
-    return () => {
-        unsubLearned();
-        unsubRankings();
-    };
+    } catch (e) {
+        console.warn("Firestore setup failed:", e);
+    }
   }, [currentUser]);
 
-  // --- データの保存処理 (Firestore) ---
-
+  // --- データの保存処理 ---
   const saveLearnedTopic = async (newTopic) => {
-    if (!currentUser) return;
+    if (!currentUser || !db) return;
     const docRef = getDocRef('shared_db', 'learned_data');
+    if (!docRef) return;
     try {
-        await updateDoc(docRef, {
-            topics: arrayUnion(newTopic)
-        });
-    } catch (e) { console.error(e); }
+        await updateDoc(docRef, { topics: arrayUnion(newTopic) });
+    } catch (e) { console.warn("Failed to save topic:", e); }
   };
 
   const saveLearnedAnswer = async (newAnswer) => {
-    if (!currentUser) return;
+    if (!currentUser || !db) return;
     const docRef = getDocRef('shared_db', 'learned_data');
+    if (!docRef) return;
     try {
-        await updateDoc(docRef, {
-            goodAnswers: arrayUnion(newAnswer)
-        });
-    } catch (e) { console.error(e); }
+        await updateDoc(docRef, { goodAnswers: arrayUnion(newAnswer) });
+    } catch (e) { console.warn("Failed to save answer:", e); }
   };
 
-  const updateRanking = async (mode, value) => {
-    if (!currentUser) return;
+  const updateRankingFirestore = async (mode, value) => {
+    if (!currentUser || !db) return;
     const docRef = getDocRef('shared_db', 'rankings');
+    if (!docRef) return;
     
-    // 現在のランキングを取得して更新（トランザクションではない簡易実装）
     try {
         const docSnap = await getDoc(docRef);
         if (docSnap.exists()) {
@@ -273,21 +275,33 @@ export default function AiOgiriApp() {
             const newEntry = { value, date: new Date().toLocaleDateString() };
             let newList = [...currentList, newEntry];
 
-            // ソート
             if (mode === 'score_attack' || mode === 'survival') {
                 newList.sort((a, b) => b.value - a.value);
             } else if (mode === 'time_attack') {
                 newList.sort((a, b) => a.value - b.value);
             }
-
-            // Top3のみ保存
             const top3 = newList.slice(0, 3);
-            
-            await updateDoc(docRef, {
-                [mode]: top3
-            });
+            await updateDoc(docRef, { [mode]: top3 });
         }
-    } catch (e) { console.error(e); }
+    } catch (e) { console.warn("Failed to update ranking:", e); }
+  };
+
+  // --- 従来のローカル保存（バックアップ） ---
+  const updateLocalRanking = (mode, value) => {
+    setRankings(prev => {
+      const currentList = prev[mode] || [];
+      const newEntry = { value, date: new Date().toLocaleDateString() };
+      let newList = [...currentList, newEntry];
+      if (mode === 'score_attack' || mode === 'survival') {
+        newList.sort((a, b) => b.value - a.value);
+      } else if (mode === 'time_attack') {
+        newList.sort((a, b) => a.value - b.value);
+      }
+      const top3 = newList.slice(0, 3);
+      const newRankings = { ...prev, [mode]: top3 };
+      localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings));
+      return newRankings;
+    });
   };
 
   // --- タイマー ---
@@ -341,13 +355,16 @@ export default function AiOgiriApp() {
       テキスト: "${text}"
       出力はJSON形式で {"isInappropriate": trueまたはfalse} としてください。
     `;
-    const result = await callGemini(prompt, "あなたは厳格なコンテンツモデレーターです。");
-    if (result === null) return true;
-    return result?.isInappropriate || false;
+    try {
+        const result = await callGemini(prompt, "あなたは厳格なコンテンツモデレーターです。");
+        if (result === null) return true;
+        return result?.isInappropriate || false;
+    } catch (e) {
+        return false;
+    }
   };
 
   const fetchAiTopic = async () => {
-    // 学習データから参考お題を抽出
     const referenceTopics = shuffleArray(learnedData.topics).slice(0, 3).join("\n");
     const referenceText = referenceTopics ? `参考にすべき過去の良質なお題例(ユーザー作成):\n${referenceTopics}` : "";
     const prompt = `
@@ -365,14 +382,13 @@ export default function AiOgiriApp() {
   };
 
   const fetchAiCards = async (count = 10) => {
-    // 学習データから参考回答を抽出
     const referenceAnswers = shuffleArray(learnedData.goodAnswers).slice(0, 5).join(", ");
-    const referenceText = referenceAnswers ? `ユーザーが高得点を出した回答の傾向（参考）: ${referenceAnswers}` : "";
+    const referenceText = referenceAnswers ? `ユーザーが好む回答の傾向（参考）: ${referenceAnswers}` : "";
     const prompt = `
       大喜利の回答カード（手札）として使える、単語や短いフレーズを${count}個生成してください。
       条件:
       1. シュール、面白い、少し自虐的、または全く無関係な名詞など、バラエティ豊かにすること。
-      2. 毎回必ず違う種類の単語を選ぶこと。
+      2. 毎回必ず違う種類の単語を選ぶこと。既存のありふれた回答は避けること。
       3. 基本的に「体言止め」できる名詞や名詞句にすること。
       4. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} とすること。
       ${referenceText}
@@ -576,21 +592,24 @@ export default function AiOgiriApp() {
     if (gameConfig.mode === 'single') {
         if (gameConfig.singleMode === 'score_attack') {
             if (currentRound >= TOTAL_ROUNDS_SCORE_ATTACK) {
-                updateRanking('score_attack', players[0].score);
+                updateLocalRanking('score_attack', players[0].score);
+                updateRankingFirestore('score_attack', players[0].score);
                 setGamePhase('final_result');
                 return;
             }
         } else if (gameConfig.singleMode === 'survival') {
             if (isSurvivalGameOver) {
                 const wins = currentRound - 1;
-                updateRanking('survival', wins);
+                updateLocalRanking('survival', wins);
+                updateRankingFirestore('survival', wins);
                 setGamePhase('final_result');
                 return;
             }
         } else if (gameConfig.singleMode === 'time_attack') {
             if (finishTime) {
                 const timeScore = finishTime - startTime;
-                updateRanking('time_attack', timeScore);
+                updateLocalRanking('time_attack', timeScore);
+                updateRankingFirestore('time_attack', timeScore);
                 setGamePhase('final_result');
                 return;
             }
@@ -649,7 +668,6 @@ export default function AiOgiriApp() {
     let finalTopic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
     
-    // 【学習】新しいお題ならFirestoreへ保存
     if (!topicsList.includes(finalTopic)) {
       setTopicsList(prev => [...prev, finalTopic]);
       saveLearnedTopic(finalTopic);
@@ -705,7 +723,6 @@ export default function AiOgiriApp() {
       setAiComment(result.comment);
       earnedScore = result.score;
       
-      // 【学習】80点以上ならFirestoreへ保存
       if (earnedScore >= HIGH_SCORE_THRESHOLD) {
         saveLearnedAnswer(answerText);
       }
@@ -845,6 +862,10 @@ export default function AiOgiriApp() {
                     <button onClick={() => setGameConfig(prev => ({...prev, singleMode: 'time_attack'}))} className={`w-full p-4 rounded-xl border-2 text-left flex items-center justify-between transition-all ${gameConfig.singleMode === 'time_attack' ? 'border-blue-600 bg-blue-50 ring-2 ring-blue-200 shadow-md' : 'border-slate-200 hover:border-blue-300 bg-white'}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${gameConfig.singleMode === 'time_attack' ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Clock className="w-5 h-5"/></div><div><div className={`font-bold ${gameConfig.singleMode === 'time_attack' ? 'text-blue-900' : 'text-slate-900'}`}>タイムアタック</div><div className="text-xs text-slate-500">合計{TIME_ATTACK_GOAL_SCORE}点到達までのタイムを競う</div></div></div>{gameConfig.singleMode === 'time_attack' && <Check className="w-6 h-6 text-blue-600" />}</button>
                     <button onClick={() => setGameConfig(prev => ({...prev, singleMode: 'freestyle'}))} className={`w-full p-4 rounded-xl border-2 text-left flex items-center justify-between transition-all ${gameConfig.singleMode === 'freestyle' ? 'border-green-600 bg-green-50 ring-2 ring-green-200 shadow-md' : 'border-slate-200 hover:border-green-300 bg-white'}`}><div className="flex items-center gap-3"><div className={`p-2 rounded-full ${gameConfig.singleMode === 'freestyle' ? 'bg-green-600 text-white' : 'bg-slate-100 text-slate-400'}`}><Infinity className="w-5 h-5"/></div><div><div className={`font-bold ${gameConfig.singleMode === 'freestyle' ? 'text-green-900' : 'text-slate-900'}`}>フリースタイル</div><div className="text-xs text-slate-500">お題作成から楽しむ無限モード</div></div></div>{gameConfig.singleMode === 'freestyle' && <Check className="w-6 h-6 text-green-600" />}</button>
                 </div>
+                
+                <div className="mt-6 text-center">
+                   <button onClick={resetLearnedData} className="text-xs text-slate-400 hover:text-red-500 flex items-center justify-center gap-1 mx-auto underline decoration-dotted"><Trash2 className="w-3 h-3" />AIの学習データをリセット</button>
+                </div>
             </div>
           ) : (
             <>
@@ -899,7 +920,12 @@ export default function AiOgiriApp() {
         <h2 className="text-xl font-bold text-slate-500 mb-2">{resultTitle}</h2>
         <div className="text-6xl font-black text-indigo-600 mb-4">{resultMain}</div>
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 w-full max-w-sm mb-4"><p className="text-xl font-bold text-slate-800">{resultSub}</p></div>
-        <div className="w-full max-w-sm mb-8">{rankingList}</div>
+        
+        {/* ランキング表示 */}
+        <div className="w-full max-w-sm mb-8">
+          {rankingList}
+        </div>
+
         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700 shadow-xl transition-all active:scale-95">タイトルへ戻る</button>
       </div>
     );
