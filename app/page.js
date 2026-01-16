@@ -1,7 +1,9 @@
-import React, { useState, useEffect } from 'react';
-import { Play, RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, EyeOff, ArrowDown, Wand2, Home } from 'lucide-react';
+"use client";
 
-// --- フォールバック用データ（通信エラー時などに使用） ---
+import React, { useState, useEffect } from 'react';
+import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home } from 'lucide-react';
+
+// --- フォールバック用データ ---
 const FALLBACK_TOPICS = [
   "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。",
   "「この医者、ヤブ医者だな…」なぜそう思った？ 第一声が「 {placeholder} 」だった。",
@@ -19,8 +21,7 @@ const FALLBACK_ANSWERS = [
   "賞味期限切れのプリン", "隣の家のポチ", "確定申告書", "お母さんの手作り弁当",
   "爆発寸前のダイナマイト", "聖徳太子の肖像画", "伝説の剣（エクスカリバー）",
   "使いかけの消しゴム", "大量のわさび", "自分探しの旅", "闇の組織",
-  "タピオカミ"use client"; // ← Next.jsで動きのある画面を作るための魔法の言葉
-ルクティー", "空飛ぶスパゲッティ・モンスター", "5000兆円",
+  "タピオカミルクティー", "空飛ぶスパゲッティ・モンスター", "5000兆円",
   "筋肉痛", "反抗期", "黒歴史", "Wi-Fiのパスワード", "ひざ小僧",
   "絶対に押してはいけないボタン", "全裸の銅像", "生き別れの兄",
   "トイレットペーパーの芯", "3日前のおにぎり", "オカンの小言",
@@ -41,12 +42,10 @@ const FALLBACK_COMMENTS = [
   "ある意味、哲学的ですらあります。",
 ];
 
-// --- API関数（ここを安全な形に修正しました） ---
+// --- API関数 ---
 
 const callGemini = async (prompt, systemInstruction = "") => {
   try {
-    // ★ここが重要変更点★
-    // Googleに直接送るのではなく、手順④で作った「自分のサーバー(/api/gemini)」に依頼します
     const response = await fetch('/api/gemini', {
       method: "POST",
       headers: {
@@ -60,7 +59,6 @@ const callGemini = async (prompt, systemInstruction = "") => {
     }
 
     const data = await response.json();
-    // サーバーから返ってきたデータからテキストを取り出します
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
     return JSON.parse(text);
   } catch (error) {
