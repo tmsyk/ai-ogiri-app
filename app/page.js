@@ -143,15 +143,22 @@ export default function AiOgiriApp() {
     if (!isAiActive) return false;
 
     const prompt = `
-      以下のテキストが、公序良俗に反する言葉、差別用語、過度な下ネタ、暴力的な表現、他人を不快にする誹謗中傷を含んでいるか判定してください。
-      大喜利のお題として許容できる範囲のユーモアならfalse、明らかに悪意がある・不快なものはtrueとしてください。
+      以下のテキストを厳格にモデレーションしてください。
+      
+      判定基準:
+      1. 公序良俗に反する言葉、差別用語、性的な表現、暴力的な表現、犯罪を助長する表現、他人を傷つける誹謗中傷が含まれているか。
+      2. 文脈が「大喜利」であっても、単語そのものが不適切であれば「不適切」とみなします。
+      3. 伏せ字（○や*など）で隠されていても、不適切な言葉を意図している場合は「不適切」とみなします。
+
+      判定結果:
+      不適切な要素が少しでも含まれていれば true、問題なければ false を返してください。
       
       テキスト: "${text}"
       
       出力はJSON形式で {"isInappropriate": trueまたはfalse} としてください。
     `;
     
-    const result = await callGemini(prompt, "あなたはコンテンツの安全性を判定するAIモデレーターです。");
+    const result = await callGemini(prompt, "あなたは厳格なコンテンツモデレーターです。");
     return result?.isInappropriate || false;
   };
 
@@ -381,10 +388,12 @@ export default function AiOgiriApp() {
 
     // 安全性チェック
     const isUnsafe = await checkContentSafety(manualTopicInput);
+    
+    // AIが「不適切」と判断した場合、ここでブロックして終了
     if (isUnsafe) {
-        alert("⚠️ AI判定：お題に不適切な表現が含まれている可能性があります。\n\n表現を見直してください。");
+        alert("⚠️ AI判定：お題に不適切な表現が含まれているため、使用できません。\n\n表現を見直して、健全なお題にしてください。");
         setIsCheckingTopic(false);
-        return;
+        return; // ここでreturnすることで、画面遷移を防ぐ
     }
 
     let finalTopic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
