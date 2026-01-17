@@ -130,6 +130,7 @@ export default function AiOgiriApp() {
   const [isJudging, setIsJudging] = useState(false);
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [modalType, setModalType] = useState(null);
+  const [showHallOfFame, setShowHallOfFame] = useState(false); // 【修正】これを復活させました
   const [aiFeedback, setAiFeedback] = useState(null);
   const [topicFeedback, setTopicFeedback] = useState(null);
   const [userName, setUserName] = useState("あなた");
@@ -207,7 +208,7 @@ export default function AiOgiriApp() {
 
     const learnedDocRef = getDocRef('shared_db', 'learned_data');
     if (learnedDocRef) {
-        onSnapshot(learnedDocRef, (docSnap) => {
+        const unsubLearned = onSnapshot(learnedDocRef, (docSnap) => {
             if (docSnap.exists()) {
                 const data = docSnap.data();
                 setLearnedData(prev => ({ 
@@ -814,7 +815,19 @@ export default function AiOgiriApp() {
         {type === 'update' && (
           <div className="space-y-6 text-slate-700">
             <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><History className="w-6 h-6" /> 更新履歴</h3>
-            <div className="border-l-4 border-indigo-200 pl-4 py-1"><div className="flex items-baseline gap-2 mb-1"><span className="font-bold text-lg text-slate-800">Ver 0.01</span><span className="text-xs text-slate-400">2026/01/17</span></div><ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5"><li>ユーザー名変更機能の追加</li><li>殿堂入り（90点以上）機能の実装</li><li>回答制限時間（30秒）の追加</li><li>お題変更・手札交換の改善</li></ul></div>
+            <div className="space-y-4">
+              {UPDATE_LOGS.map((log, i) => (
+                <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
+                  <div className="flex items-baseline gap-2 mb-1">
+                    <span className="font-bold text-lg text-slate-800">{log.version}</span>
+                    <span className="text-xs text-slate-400">{log.date}</span>
+                  </div>
+                  <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5">
+                    {log.content.map((item, j) => <li key={j}>{item}</li>)}
+                  </ul>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
@@ -827,9 +840,9 @@ export default function AiOgiriApp() {
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500 text-slate-900">
         <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mb-6"><Sparkles className="w-10 h-10 text-indigo-600" /></div>
         <h1 className="text-4xl font-extrabold text-slate-900 mb-2">AI大喜利</h1>
-        <p className="text-slate-500 mb-8">Ver 0.01<br/><span className="text-xs text-indigo-500">Powered by Gemini</span></p>
+        <p className="text-slate-500 mb-8">{APP_VERSION}<br/><span className="text-xs text-indigo-500">Powered by Gemini</span></p>
         
-        <button onClick={() => setModalType('update')} className="text-xs font-bold text-slate-400 hover:text-indigo-600 flex items-center gap-1 mb-6 px-3 py-1 rounded-full border border-slate-200 hover:bg-white transition-colors"><History className="w-3 h-3" /> Ver 0.01 更新情報</button>
+        <button onClick={() => setModalType('update')} className="text-xs font-bold text-slate-400 hover:text-indigo-600 flex items-center gap-1 mb-6 px-3 py-1 rounded-full border border-slate-200 hover:bg-white transition-colors"><History className="w-3 h-3" /> 更新情報</button>
 
         <div className="grid gap-4 w-full max-w-md mb-8">
           <button onClick={() => { setGameConfig({ mode: 'single', singleMode: 'score_attack', playerCount: 1 }); setAppMode('setup'); }} className="flex items-center justify-center gap-3 p-5 bg-white border-2 border-slate-200 rounded-2xl hover:border-indigo-500 hover:shadow-md transition-all group text-left"><div className="bg-indigo-50 p-3 rounded-full group-hover:bg-indigo-100"><User className="w-6 h-6 text-indigo-600" /></div><div><div className="font-bold text-slate-900">一人で遊ぶ</div><div className="text-xs text-slate-500">4つのモードでAIに挑戦</div></div></button>
@@ -852,7 +865,10 @@ export default function AiOgiriApp() {
         <div className="w-full max-w-md space-y-6 bg-white p-6 rounded-2xl shadow-sm border border-slate-100">
           <div className="mb-4">
              <label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label>
-             <input type="text" value={userName} onChange={(e) => saveUserName(e.target.value)} className="w-full p-3 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" />
+             <div className="relative">
+                <input type="text" value={userName} onChange={(e) => saveUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" />
+                <User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" />
+             </div>
           </div>
           {gameConfig.mode === 'single' ? (
             <div>
@@ -886,8 +902,7 @@ export default function AiOgiriApp() {
   // 結果画面等は前回と同じロジックなので省略せずそのまま記述
   if (gamePhase === 'final_result') {
     const player = players[0];
-    let resultTitle = "", resultMain = "", resultSub = "", rankingList = null;
-
+    let resultTitle = "", resultMain = "", resultSub = "";
     if (gameConfig.singleMode === 'score_attack') {
         resultTitle = `全${TOTAL_ROUNDS_SCORE_ATTACK}回戦 終了！`;
         resultMain = `${player.score}点`;
@@ -956,6 +971,7 @@ export default function AiOgiriApp() {
             <div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full border border-slate-100">
               <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 text-amber-600">{turnPlayerIndex === masterIndex ? <Eye className="w-8 h-8" /> : <PenTool className="w-8 h-8" />}</div>
               <h2 className="text-2xl font-bold text-slate-800 mb-2">次は {players[turnPlayerIndex].name} さんの番です</h2>
+              <p className="text-slate-500 mb-8">{turnPlayerIndex === masterIndex ? '全員の回答が出揃いました！親に端末を渡してください。' : '他の人に見えないように端末を受け取ってください。'}</p>
               <button onClick={() => turnPlayerIndex === masterIndex ? startJudging() : setGamePhase('answer_input')} className="w-full py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transform transition active:scale-95">{turnPlayerIndex === masterIndex ? '審査を始める（ダミーが混ざります！）' : '回答する'}</button>
             </div>
           </div>
