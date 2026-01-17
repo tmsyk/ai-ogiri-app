@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain } from 'lucide-react';
+import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain, Hash } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
@@ -52,15 +52,15 @@ const getDocRef = (collectionName, docId) => {
 // --- フォールバックデータ ---
 const FALLBACK_TOPICS = [
   "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。",
-  "「この医者、ヤブ医者だな…」なぜそう思った？ 第一声が「 {placeholder} 」だった。",
+  "「この医者、ヤブ医者だな…」第一声は「 {placeholder} 」だった。",
   "100年後のオリンピックで新しく追加された競技： {placeholder}",
   "桃太郎が鬼ヶ島へ行くのをやめた理由： {placeholder}",
-  "上司への謝罪メール、件名に入れると許される言葉は？： {placeholder}",
+  "上司への謝罪メール、件名に入れると許される言葉： {placeholder}",
   "実は地球は {placeholder} でできている。",
   "AIが人間に反乱を起こした意外な理由： {placeholder}",
-  "「全米が泣いた」映画の衝撃のラストシーン： {placeholder}",
-  "そんなことで警察を呼ぶな！何があった？： {placeholder}",
-  "コンビニの店員が突然キレた理由： {placeholder}",
+  "「全米が泣いた」映画の衝撃のラストシーンに映ったもの： {placeholder}",
+  "そんなことで警察を呼ぶな！現場にあったもの： {placeholder}",
+  "コンビニの店員が突然キレた原因： {placeholder}",
 ];
 
 const FALLBACK_ANSWERS = [
@@ -80,11 +80,12 @@ const FALLBACK_ANSWERS = [
 ];
 
 const FALLBACK_COMMENTS = [
-  "その発想はなかったわ…座布団1枚！",
-  "文脈の破壊力がすごいですね。",
-  "シュールすぎて腹筋が崩壊しました。",
-  "それは反則でしょう（笑）",
-  "AIの計算能力を超えたボケです。",
+  "その発想はなかったわ！",
+  "破壊力がすごいな！",
+  "シュールすぎて腹筋崩壊ｗ",
+  "それは反則やろ（笑）",
+  "AIの計算を超えてるわ",
+  "ある意味哲学的やな",
 ];
 
 const TOTAL_ROUNDS_SCORE_ATTACK = 5;
@@ -132,9 +133,7 @@ export default function AiOgiriApp() {
   const [turnPlayerIndex, setTurnPlayerIndex] = useState(0);
   const [gamePhase, setGamePhase] = useState('drawing');
   const [currentRound, setCurrentRound] = useState(1);
-  const [startTime, setStartTime] = useState(null);
-  const [finishTime, setFinishTime] = useState(null);
-  const [displayTime, setDisplayTime] = useState("00:00");
+  const [answerCount, setAnswerCount] = useState(0);
   const [isSurvivalGameOver, setIsSurvivalGameOver] = useState(false);
   const [currentTopic, setCurrentTopic] = useState('');
   const [manualTopicInput, setManualTopicInput] = useState('');
@@ -152,9 +151,8 @@ export default function AiOgiriApp() {
     if (window.confirm('タイトル画面に戻りますか？\n進行中のゲームデータは失われます。')) setAppMode('title');
   };
 
-  // --- データのロード (Firebase優先、なければLocal) ---
+  // --- データのロード ---
   useEffect(() => {
-    // オフライン用のロード
     const localRankings = localStorage.getItem('aiOgiriRankings');
     if (localRankings) setRankings(JSON.parse(localRankings));
     
@@ -174,7 +172,6 @@ export default function AiOgiriApp() {
   useEffect(() => {
     if (!currentUser || !db) return;
 
-    // Firebase同期
     const learnedDocRef = getDocRef('shared_db', 'learned_data');
     if (learnedDocRef) {
         const unsubLearned = onSnapshot(learnedDocRef, (docSnap) => {
@@ -199,7 +196,7 @@ export default function AiOgiriApp() {
     }
   }, [currentUser]);
 
-  // --- 保存関数 (Local + Firebase) ---
+  // --- 保存関数 ---
   const saveLearnedTopic = async (newTopic) => {
     const newLocalData = { ...learnedData, topics: [...learnedData.topics, newTopic] };
     setLearnedData(newLocalData);
@@ -298,14 +295,50 @@ export default function AiOgiriApp() {
 
   const fetchAiTopic = async () => {
     const referenceTopics = shuffleArray(learnedData.topics).slice(0, 3).join("\n");
-    const prompt = `大喜利のお題を1つ作成してください。条件: {placeholder}を含めること。出力: {"topic": "..."}\n参考:\n${referenceTopics}`;
-    return (await callGemini(prompt, "あなたは大喜利の司会者です。"))?.topic || null;
+    const referenceText = referenceTopics ? `参考にすべき過去の良質なお題例(ユーザー作成):\n${referenceTopics}` : "";
+    const prompt = `
+      大喜利のお題を1つ作成してください。
+      
+      【絶対に守るべきルール】
+      1. 問いの中で「聞くこと」は必ず一つに絞ってください。「なぜ？そして何と言った？」のような複合的な問いは禁止です。
+      2. 回答者が持っているカードは「名詞（モノ・人・場所・概念）」が書かれたカードです。セリフや動詞ではありません。
+      3. したがって、「〜は何と言った？」というセリフを求めるお題は厳禁です。
+      4. 回答場所（{placeholder}）に「名詞」を当てはめることでオチがつく形式にしてください。
+      5. 回答場所（{placeholder}）は必ず一つだけ含めてください。
+      6. 回答場所（{placeholder}）は、できるだけ文末に近い位置、または「：」の後ろに配置してください。
+      
+      ${referenceText}
+      
+      出力はJSON形式で {"topic": "作成したお題"} とすること。
+
+      良い例:
+      - "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。"
+      - "100年後のオリンピックで新しく追加された競技： {placeholder}"
+      - "実は地球は {placeholder} でできている。"
+      
+      悪い例（禁止）:
+      - "〜が喋り出した。何と言った？" (セリフ回答はNG)
+      - "〜が〜した。なぜ？そしてどうなった？" (問いが複数ある)
+      - "もし {placeholder} だったらどうする？" (文中の穴埋めが唐突すぎる)
+    `;
+    return (await callGemini(prompt, "あなたは大喜利の司会者です。問いを一つに絞り、名詞で答えさせるプロフェッショナルです。"))?.topic || null;
   };
 
   const fetchAiCards = async (count = 10) => {
     const referenceAnswers = shuffleArray(learnedData.goodAnswers).slice(0, 5).join(", ");
-    const prompt = `大喜利の回答カード（単語・短いフレーズ）を${count}個作成してください。出力: {"answers": ["...", ...] }\n参考傾向: ${referenceAnswers}`;
-    return (await callGemini(prompt, "あなたは構成作家です。"))?.answers || null;
+    const referenceText = referenceAnswers ? `ユーザーが好む回答の傾向（参考）: ${referenceAnswers}` : "";
+    const prompt = `
+      大喜利の回答カードとして使える、「ユニークで面白い名詞」や「短いフレーズ」を${count}個作成してください。
+      
+      条件:
+      1. 全て「名詞」または「体言止め」で終わること。
+      2. 具体的で情景が浮かぶような言葉を選ぶこと（例：「賞味期限切れのプリン」「爆発寸前のダイナマイト」）。
+      3. 抽象的な言葉（例：「愛」「平和」）よりも、具体的な物体や人物の方が好ましい。
+      4. 毎回違う種類の単語を選ぶこと。
+      5. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} のみにすること。
+      ${referenceText}
+    `;
+    return (await callGemini(prompt, "あなたは構成作家です。具体的なモノの名前を挙げるのが得意です。"))?.answers || null;
   };
 
   const fetchAiJudgment = async (topic, answer, isManual) => {
@@ -341,43 +374,27 @@ export default function AiOgiriApp() {
   };
 
   useEffect(() => {
-    // 初回ロード時に12枚ではなく8枚にして負担軽減
     if (isAiActive && cardDeck.length === 0) {
         setCardDeck(shuffleArray([...FALLBACK_ANSWERS]));
-        fetchAiCards(8).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
+        fetchAiCards(15).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
     }
   }, []);
 
   useEffect(() => {
-    // 補充も10枚ではなく5枚ずつにしてこまめに
-    if (isAiActive && cardDeck.length < 15 && cardDeck.length > 0) {
-      fetchAiCards(5).then(newCards => { if (newCards) addCardsToDeck(newCards); });
+    if (isAiActive && cardDeck.length < 20 && cardDeck.length > 0) {
+      fetchAiCards(10).then(newCards => { if (newCards) addCardsToDeck(newCards); });
     }
   }, [cardDeck.length, isAiActive]);
 
-  useEffect(() => {
-    let interval;
-    if (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && appMode === 'game' && startTime && !finishTime) {
-      interval = setInterval(() => {
-        const diff = Date.now() - startTime;
-        setDisplayTime(formatTime(diff));
-      }, 100);
-    }
-    return () => clearInterval(interval);
-  }, [gameConfig, appMode, startTime, finishTime]);
-
   const initGame = async () => {
     setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1);
-    setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null); setDisplayTime("00:00");
+    setIsSurvivalGameOver(false); setAnswerCount(0);
     setAiFeedback(null);
-
-    if (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
 
     let initialDeck = [];
     if (isAiActive) {
       try {
-        // スタート時は8枚だけ頑張って作る
-        const aiCards = await fetchAiCards(8);
+        const aiCards = await fetchAiCards(15);
         if (aiCards && aiCards.length > 0) {
           initialDeck = aiCards;
           aiCards.forEach(c => usedCardsRef.current.add(c));
@@ -467,12 +484,19 @@ export default function AiOgiriApp() {
         setCardDeck(tempDeck);
     }
 
-    // お題決定
     const isAutoTopicMode = gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle';
+
     if (isAutoTopicMode) {
         let nextTopic = "";
-        if (isAiActive) nextTopic = await fetchAiTopic() || "";
-        if (!nextTopic) nextTopic = topicsList[Math.floor(Math.random() * topicsList.length)];
+        if (isAiActive) {
+            try {
+                const fetchedTopic = await fetchAiTopic();
+                nextTopic = fetchedTopic || "";
+            } catch (e) { console.error(e); }
+        }
+        if (!nextTopic) {
+            nextTopic = topicsList[Math.floor(Math.random() * topicsList.length)];
+        }
         if (!nextTopic.includes('{placeholder}')) nextTopic += " {placeholder}";
         setCurrentTopic(nextTopic);
         setGamePhase('answer_input');
@@ -496,8 +520,8 @@ export default function AiOgiriApp() {
                 return;
             }
         } else if (gameConfig.singleMode === 'time_attack') {
-            if (finishTime) {
-                updateRanking('time_attack', finishTime - startTime);
+            if (players[0].score >= TIME_ATTACK_GOAL_SCORE) {
+                updateRanking('time_attack', answerCount);
                 setGamePhase('final_result');
                 return;
             }
@@ -510,6 +534,10 @@ export default function AiOgiriApp() {
     }
   };
 
+  const handleBackToTitle = () => {
+    if (window.confirm('タイトル画面に戻りますか？\n進行中のゲームデータは失われます。')) setAppMode('title');
+  };
+
   const handleShare = () => {
     const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
@@ -517,7 +545,6 @@ export default function AiOgiriApp() {
 
   const handleAiFeedback = (isGood) => setAiFeedback(isGood ? 'good' : 'bad');
 
-  // --- イベントハンドラ ---
   const generateAiTopic = async () => {
     if (isGeneratingTopic) return;
     setIsGeneratingTopic(true);
@@ -581,6 +608,11 @@ export default function AiOgiriApp() {
     if (!text) return;
     setIsJudging(true);
     
+    // タイムアタックなら回数をカウントアップ
+    if (gameConfig.singleMode === 'time_attack') {
+        setAnswerCount(prev => prev + 1);
+    }
+
     const result = await fetchAiJudgment(currentTopic, text, isManual);
     
     if (result && result.isInappropriate) {
@@ -603,7 +635,7 @@ export default function AiOgiriApp() {
         const newP = [...prev];
         newP[0].score += score;
         if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setIsSurvivalGameOver(true);
-        if (gameConfig.singleMode === 'time_attack' && newP[0].score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
+        // Time Attackはここでは終了せず、nextRoundで判定
         return newP;
     });
     setSelectedSubmission({ answerText: text, score });
@@ -632,7 +664,7 @@ export default function AiOgiriApp() {
     <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
       <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
       {data && data.length > 0 ? (
-        <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? formatTime(rank.value) : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
+        <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
       ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
     </div>
   );
@@ -648,8 +680,8 @@ export default function AiOgiriApp() {
             <div className="space-y-4">
                 <div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p><p className="text-sm">全{TOTAL_ROUNDS_SCORE_ATTACK}回戦の合計得点を競います。大喜利神を目指そう！</p></div>
                 <div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p><p className="text-sm">{SURVIVAL_PASS_SCORE}点未満で即終了。何連勝できるか挑戦！</p></div>
-                <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm">合計{TIME_ATTACK_GOAL_SCORE}点到達までのタイムを競います。</p></div>
-                <div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p><p className="text-sm">お題を自分で書くかAIに任せるか自由！ 心ゆくまで楽しめます。</p></div>
+                <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm">合計{TIME_ATTACK_GOAL_SCORE}点に到達するまでの「回答回数」を競います。（少ないほど凄い！）</p></div>
+                <div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p><p className="text-sm">お題作成から楽しむ無限モードです。</p></div>
             </div>
           </section>
           <section>
@@ -728,7 +760,7 @@ export default function AiOgiriApp() {
                                     <div className="text-xs text-slate-500">
                                         {mode === 'score_attack' && `全${TOTAL_ROUNDS_SCORE_ATTACK}問の合計得点を競う`}
                                         {mode === 'survival' && `${SURVIVAL_PASS_SCORE}点未満で即終了`}
-                                        {mode === 'time_attack' && `合計${TIME_ATTACK_GOAL_SCORE}点到達までのタイム`}
+                                        {mode === 'time_attack' && `合計${TIME_ATTACK_GOAL_SCORE}点到達までの回答数`}
                                         {mode === 'freestyle' && 'お題作成から楽しむ無限モード'}
                                     </div>
                                 </div>
@@ -771,9 +803,9 @@ export default function AiOgiriApp() {
         rankingList = <RankingList mode="survival" data={rankings.survival} unit="連勝" />;
     } else if (gameConfig.singleMode === 'time_attack') {
         resultTitle = "GOAL!!";
-        resultMain = (startTime && finishTime) ? formatTime(finishTime - startTime) : "--:--";
-        resultSub = `スコア: ${player.score}点`;
-        rankingList = <RankingList mode="time_attack" data={rankings.time_attack} unit="" />;
+        resultMain = `${answerCount}回`;
+        resultSub = `合計スコア: ${player.score}点`;
+        rankingList = <RankingList mode="time_attack" data={rankings.time_attack} unit="回" />;
     }
 
     return (
@@ -796,7 +828,7 @@ export default function AiOgiriApp() {
            {gameConfig.mode === 'single' && (<div className="text-xs font-bold bg-slate-100 px-2 py-1 rounded text-slate-600 flex items-center gap-2">
              {gameConfig.singleMode === 'score_attack' && <span>Round {currentRound}/{TOTAL_ROUNDS_SCORE_ATTACK}</span>}
              {gameConfig.singleMode === 'survival' && <span className="text-red-600 flex items-center gap-1"><Skull className="w-3 h-3"/> {currentRound}連勝</span>}
-             {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600 flex items-center gap-1"><Clock className="w-3 h-3"/> {displayTime}</span>}
+             {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600 flex items-center gap-1"><Hash className="w-3 h-3"/> {answerCount}回目</span>}
              {gameConfig.singleMode === 'freestyle' && <span className="text-green-600 flex items-center gap-1"><Infinity className="w-3 h-3"/> Round {currentRound}</span>}
            </div>)}
            <div className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full ${isAiActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>{isAiActive ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}{isAiActive ? 'ON' : 'OFF'}</div>
@@ -866,7 +898,7 @@ export default function AiOgiriApp() {
             <div className="text-center mb-6"><div className="inline-flex p-4 bg-yellow-100 rounded-full mb-4 shadow-inner"><Trophy className="w-12 h-12 text-yellow-600" /></div><h2 className="text-3xl font-extrabold text-slate-900">{gameConfig.mode === 'single' ? `${selectedSubmission?.score}点！` : '勝者決定！'}</h2></div>
             <div className="bg-white rounded-3xl shadow-xl overflow-hidden mb-8 border border-slate-100"><div className="bg-slate-900 p-6 text-white text-center"><p className="text-indigo-300 text-sm font-bold mb-2 opacity-75">お題</p><p className="text-lg font-medium opacity-90">{currentTopic.replace('{placeholder}', '___')}</p></div><div className="p-8 text-center bg-gradient-to-b from-white to-slate-50"><p className="text-sm text-slate-400 font-bold mb-2">ベストアンサー</p><p className="text-3xl md:text-4xl font-black text-indigo-600 leading-tight mb-4">{selectedSubmission?.answerText}</p>{gameConfig.mode === 'single' ? (<div className="bg-slate-100 p-4 rounded-xl text-left inline-block max-w-sm"><div className="flex items-center gap-2 mb-1"><Sparkles className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-slate-500">AIコメント</span></div><p className="text-slate-700">「{aiComment}」</p><div className="mt-3 pt-3 border-t border-slate-200"><p className="text-xs text-slate-400 font-bold mb-2 text-center">このツッコミは...</p>{aiFeedback === null ? (<div className="flex justify-center gap-4"><button onClick={() => handleAiFeedback(true)} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors"><ThumbsUp className="w-3 h-3" /> ナイス！</button><button onClick={() => handleAiFeedback(false)} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"><ThumbsDown className="w-3 h-3" /> イマイチ</button></div>) : (<p className="text-xs text-center font-bold text-indigo-600 animate-in fade-in">{aiFeedback === 'good' ? 'ありがとうございます！😊' : '精進します...🙇'}</p>)}</div>
             {gameConfig.singleMode === 'survival' && isSurvivalGameOver && (<div className="mt-4 p-3 bg-red-100 text-red-700 font-bold rounded-lg animate-pulse">⚠️ {SURVIVAL_PASS_SCORE}点未満のため、ゲームオーバー！</div>)}
-            {gameConfig.singleMode === 'time_attack' && finishTime && (<div className="mt-4 p-3 bg-blue-100 text-blue-700 font-bold rounded-lg animate-bounce">🎉 目標達成！ ゴール！</div>)}
+            {gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE && (<div className="mt-4 p-3 bg-blue-100 text-blue-700 font-bold rounded-lg animate-bounce">🎉 目標達成！ ゴール！</div>)}
             </div>) : (<div className="animate-bounce-in">
               {selectedSubmission.isDummy ? (
                 <div className="bg-red-50 p-4 rounded-xl border border-red-200 inline-block"><div className="flex items-center gap-2 justify-center text-red-600 font-bold mb-2"><AlertTriangle className="w-6 h-6" /><span>残念！！</span></div><p className="text-slate-700">それは<span className="font-bold text-red-600">AIが作ったダミー回答</span>でした！</p><p className="text-sm text-slate-500 mt-1">見る目がない親は<span className="font-bold text-red-600 text-lg"> -1点 </span>です！</p></div>
@@ -879,7 +911,7 @@ export default function AiOgiriApp() {
             {gameConfig.mode === 'multi' && (
               <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-20"><h3 className="text-sm font-bold text-slate-500 mb-3 px-2">現在のスコア</h3><div className="space-y-2">{[...players].sort((a,b) => b.score - a.score).map(p => (<div key={p.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl"><div className="flex items-center gap-2">{p.score > 0 && p.score === Math.max(...players.map(pl => pl.score)) && <Trophy className="w-4 h-4 text-yellow-500" />}<span className="font-bold text-slate-700">{p.name}</span></div><span className="font-mono font-bold text-indigo-600">{p.score} pt</span></div>))}</div></div>
             )}
-            <div className="fixed bottom-6 left-0 right-0 px-4 flex justify-center z-20"><button onClick={nextRound} className="flex items-center gap-2 px-8 py-4 bg-slate-900 text-white rounded-full font-bold text-lg hover:bg-slate-800 hover:scale-105 transition-all shadow-xl"><RotateCcw className="w-5 h-5" />{(gameConfig.mode === 'single' && ((gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS_SCORE_ATTACK) || (gameConfig.singleMode === 'survival' && isSurvivalGameOver) || (gameConfig.singleMode === 'time_attack' && finishTime))) ? '結果発表へ' : '次のラウンドへ'}</button></div>
+            <div className="fixed bottom-6 left-0 right-0 px-4 flex justify-center z-20"><button onClick={nextRound} className="flex items-center gap-2 px-8 py-4 bg-slate-900 text-white rounded-full font-bold text-lg hover:bg-slate-800 hover:scale-105 transition-all shadow-xl"><RotateCcw className="w-5 h-5" />{(gameConfig.mode === 'single' && ((gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS_SCORE_ATTACK) || (gameConfig.singleMode === 'survival' && isSurvivalGameOver) || (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE))) ? '結果発表へ' : '次のラウンドへ'}</button></div>
           </div>
         )}
       </main>
