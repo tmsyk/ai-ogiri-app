@@ -7,8 +7,6 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- Firebase設定（環境変数対応） ---------------------------------------
-// Vercel等の環境変数が設定されていればそれが使われます。
-// 設定がない場合（ローカル等）は右側の文字列が使われます。
 const userFirebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSy...",
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT.firebaseapp.com",
@@ -22,10 +20,7 @@ const userFirebaseConfig = {
 // Firebase初期化（エラーガード付き）
 let app, auth, db;
 try {
-  // Canvas環境用の特別処理（もしあれば）
   const config = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : userFirebaseConfig;
-  
-  // Configが有効かチェック（プレースホルダーのままでないか）
   const isValidConfig = config && config.apiKey && config.apiKey !== "AIzaSy..." && !config.apiKey.includes("process.env");
 
   if (isValidConfig) {
@@ -37,7 +32,6 @@ try {
       auth = getAuth(app);
       db = getFirestore(app);
   } else {
-      // 環境変数も設定されておらず、コードも書き換えられていない場合
       console.log("Running in offline mode (Firebase config missing)");
   }
 } catch (e) {
@@ -433,7 +427,6 @@ export default function AiOgiriApp() {
     }
     setCardDeck(initialDeck);
 
-    // 手札配布
     const drawInitialHand = (deck, count) => {
         const hand = [];
         for (let i = 0; i < count; i++) {
@@ -475,7 +468,6 @@ export default function AiOgiriApp() {
     setMasterIndex(nextMasterIdx); setGamePhase('drawing');
     setHasTopicRerolled(false); setHasHandRerolled(false);
 
-    // 手札補充
     const drawCards = (deck, count) => {
         const needed = Math.max(0, count);
         if (needed === 0) return { hand: [], remainingDeck: deck };
@@ -515,7 +507,6 @@ export default function AiOgiriApp() {
         setCardDeck(tempDeck);
     }
 
-    // お題決定フロー
     const isAutoTopicMode = gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle';
 
     if (isAutoTopicMode) {
@@ -567,12 +558,8 @@ export default function AiOgiriApp() {
     }
   };
 
-  const handleBackToTitle = () => {
-    if (window.confirm('タイトル画面に戻りますか？\n進行中のゲームデータは失われます。')) setAppMode('title');
-  };
-
   const handleShare = () => {
-    const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
+    const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利 #Gemini`;
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
   };
 
@@ -640,6 +627,7 @@ export default function AiOgiriApp() {
     if (!manualTopicInput.trim()) return;
     
     const isAiOrigin = manualTopicInput === lastAiGeneratedTopic;
+
     if (!isAiOrigin) {
         setIsCheckingTopic(true);
         if (await checkContentSafety(manualTopicInput)) {
@@ -662,12 +650,6 @@ export default function AiOgiriApp() {
     else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
 
-  const prepareNextSubmitter = (current, master, currentPlayers) => {
-    const next = (current + 1) % currentPlayers.length;
-    if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); }
-    else { setTurnPlayerIndex(next); setGamePhase('turn_change'); }
-  };
-
   const startJudging = () => {
     let dummy = "";
     let deck = [...cardDeck];
@@ -686,7 +668,10 @@ export default function AiOgiriApp() {
   const handleSingleSubmit = async (text, isManual = false) => {
     if (!text) return;
     setIsJudging(true);
-    if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
+    
+    if (gameConfig.singleMode === 'time_attack') {
+        setAnswerCount(prev => prev + 1);
+    }
 
     const result = await fetchAiJudgment(currentTopic, text, isManual);
     
@@ -710,6 +695,7 @@ export default function AiOgiriApp() {
         const newP = [...prev];
         newP[0].score += score;
         if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setIsSurvivalGameOver(true);
+        // Time Attackはここでは終了せず、nextRoundで判定
         return newP;
     });
     setSelectedSubmission({ answerText: text, score });
@@ -733,7 +719,7 @@ export default function AiOgiriApp() {
     setGamePhase('result');
   };
 
-  // --- UI ---
+  // --- UIコンポーネント ---
   const RankingList = ({ mode, data, unit }) => (
     <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
       <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
@@ -873,6 +859,7 @@ export default function AiOgiriApp() {
     );
   }
 
+  // 結果画面・ゲーム画面は省略せず記述
   if (gamePhase === 'final_result') {
     const player = players[0];
     let resultTitle = "", resultMain = "", resultSub = "", rankingList = null;
