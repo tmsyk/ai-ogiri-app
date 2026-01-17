@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain, Hash } from 'lucide-react';
+import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain, Hash, Star } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
@@ -102,14 +102,7 @@ const shuffleArray = (array) => {
   return newArray;
 };
 
-const formatTime = (ms) => {
-  if (!ms) return "--:--";
-  const minutes = Math.floor(ms / 60000);
-  const seconds = Math.floor((ms % 60000) / 1000);
-  const milliseconds = Math.floor((ms % 1000) / 10);
-  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
-};
-
+// --- メインコンポーネント ---
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
@@ -119,6 +112,12 @@ export default function AiOgiriApp() {
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [showRules, setShowRules] = useState(false);
   const [aiFeedback, setAiFeedback] = useState(null);
+  const [topicFeedback, setTopicFeedback] = useState(null); // お題への評価 (null | 'good' | 'bad')
+
+  // リロール状態
+  const [hasTopicRerolled, setHasTopicRerolled] = useState(false);
+  const [hasHandRerolled, setHasHandRerolled] = useState(false);
+  const [isRerollingHand, setIsRerollingHand] = useState(false);
 
   const [learnedData, setLearnedData] = useState({ topics: [], goodAnswers: [] });
   const [rankings, setRankings] = useState({ score_attack: [], survival: [], time_attack: [] });
@@ -133,7 +132,7 @@ export default function AiOgiriApp() {
   const [turnPlayerIndex, setTurnPlayerIndex] = useState(0);
   const [gamePhase, setGamePhase] = useState('drawing');
   const [currentRound, setCurrentRound] = useState(1);
-  const [answerCount, setAnswerCount] = useState(0);
+  const [answerCount, setAnswerCount] = useState(0); // タイムアタック用
   const [isSurvivalGameOver, setIsSurvivalGameOver] = useState(false);
   const [currentTopic, setCurrentTopic] = useState('');
   const [manualTopicInput, setManualTopicInput] = useState('');
@@ -198,24 +197,34 @@ export default function AiOgiriApp() {
 
   // --- 保存関数 ---
   const saveLearnedTopic = async (newTopic) => {
+    if (!newTopic) return;
+    console.log("Saving topic:", newTopic); // ログで確認用
+
+    // Local
     const newLocalData = { ...learnedData, topics: [...learnedData.topics, newTopic] };
     setLearnedData(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
     
+    // Firebase
     if (currentUser && db) {
         const docRef = getDocRef('shared_db', 'learned_data');
-        if (docRef) await updateDoc(docRef, { topics: arrayUnion(newTopic) }).catch(() => {});
+        if (docRef) await updateDoc(docRef, { topics: arrayUnion(newTopic) }).catch(e => console.warn("Save topic failed", e));
     }
   };
 
   const saveLearnedAnswer = async (newAnswer) => {
+    if (!newAnswer) return;
+    console.log("Saving answer:", newAnswer); // ログで確認用
+
+    // Local
     const newLocalData = { ...learnedData, goodAnswers: [...learnedData.goodAnswers, newAnswer] };
     setLearnedData(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
 
+    // Firebase
     if (currentUser && db) {
         const docRef = getDocRef('shared_db', 'learned_data');
-        if (docRef) await updateDoc(docRef, { goodAnswers: arrayUnion(newAnswer) }).catch(() => {});
+        if (docRef) await updateDoc(docRef, { goodAnswers: arrayUnion(newAnswer) }).catch(e => console.warn("Save answer failed", e));
     }
   };
 
@@ -235,7 +244,7 @@ export default function AiOgiriApp() {
       const newEntry = { value, date: new Date().toLocaleDateString() };
       let newList = [...currentList, newEntry];
       if (mode === 'score_attack' || mode === 'survival') newList.sort((a, b) => b.value - a.value);
-      else if (mode === 'time_attack') newList.sort((a, b) => a.value - b.value);
+      else if (mode === 'time_attack') newList.sort((a, b) => a.value - b.value); 
       const top3 = newList.slice(0, 3);
       const newRankings = { ...prev, [mode]: top3 };
       localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings));
@@ -335,7 +344,7 @@ export default function AiOgiriApp() {
       2. 具体的で情景が浮かぶような言葉を選ぶこと（例：「賞味期限切れのプリン」「爆発寸前のダイナマイト」）。
       3. 抽象的な言葉（例：「愛」「平和」）よりも、具体的な物体や人物の方が好ましい。
       4. 毎回違う種類の単語を選ぶこと。
-      5. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} のみにすること。
+      5. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} のみにすること。余計な説明は不要。
       ${referenceText}
     `;
     return (await callGemini(prompt, "あなたは構成作家です。具体的なモノの名前を挙げるのが得意です。"))?.answers || null;
@@ -376,7 +385,7 @@ export default function AiOgiriApp() {
   useEffect(() => {
     if (isAiActive && cardDeck.length === 0) {
         setCardDeck(shuffleArray([...FALLBACK_ANSWERS]));
-        fetchAiCards(15).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
+        fetchAiCards(20).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
     }
   }, []);
 
@@ -390,6 +399,7 @@ export default function AiOgiriApp() {
     setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1);
     setIsSurvivalGameOver(false); setAnswerCount(0);
     setAiFeedback(null);
+    setTopicFeedback(null); // お題フィードバックリセット
 
     let initialDeck = [];
     if (isAiActive) {
@@ -401,7 +411,9 @@ export default function AiOgiriApp() {
         }
       } catch (e) {}
     }
-    if (initialDeck.length === 0) initialDeck = shuffleArray([...FALLBACK_ANSWERS]);
+    if (initialDeck.length < 10) {
+        initialDeck = [...initialDeck, ...shuffleArray([...FALLBACK_ANSWERS])];
+    }
     setCardDeck(initialDeck);
 
     // 手札配布
@@ -442,7 +454,12 @@ export default function AiOgiriApp() {
   const startRoundProcess = async (currentPlayers, nextMasterIdx) => {
     setSubmissions([]); setSelectedSubmission(null); setAiComment('');
     setManualTopicInput(''); setManualAnswerInput(''); setAiFeedback(null);
+    setTopicFeedback(null); // リセット
     setMasterIndex(nextMasterIdx); setGamePhase('drawing');
+    
+    // リロール権復活
+    setHasTopicRerolled(false);
+    setHasHandRerolled(false);
 
     // 手札補充処理
     const drawCards = (deck, count) => {
@@ -515,7 +532,8 @@ export default function AiOgiriApp() {
             }
         } else if (gameConfig.singleMode === 'survival') {
             if (isSurvivalGameOver) {
-                updateRanking('survival', currentRound - 1);
+                const wins = currentRound - 1;
+                updateRanking('survival', wins);
                 setGamePhase('final_result');
                 return;
             }
@@ -543,7 +561,58 @@ export default function AiOgiriApp() {
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
   };
 
-  const handleAiFeedback = (isGood) => setAiFeedback(isGood ? 'good' : 'bad');
+  const handleAiFeedback = (isGood) => {
+    setAiFeedback(isGood ? 'good' : 'bad');
+    if (isGood && selectedSubmission?.answerText) {
+        saveLearnedAnswer(selectedSubmission.answerText);
+    }
+  };
+
+  const handleTopicFeedback = (isGood) => {
+    setTopicFeedback(isGood ? 'good' : 'bad');
+    if (isGood && currentTopic) {
+        saveLearnedTopic(currentTopic);
+    }
+  };
+
+  // --- イベントハンドラ（リロール対応） ---
+  const handleTopicReroll = async () => {
+    if (hasTopicRerolled || isGeneratingTopic) return;
+    setIsGeneratingTopic(true);
+    let topic = await fetchAiTopic();
+    if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
+    // placeholder補正
+    let finalTopic = topic.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
+    if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
+    
+    setCurrentTopic(finalTopic);
+    setHasTopicRerolled(true);
+    setIsGeneratingTopic(false);
+  };
+
+  const handleHandReroll = async () => {
+    if (hasHandRerolled || isRerollingHand) return;
+    setIsRerollingHand(true);
+
+    const currentHandSize = singlePlayerHand.length;
+    let currentDeck = [...cardDeck];
+    if (currentDeck.length < currentHandSize) {
+        if (isAiActive) {
+            const newCards = await fetchAiCards(10);
+            if (newCards) addCardsToDeck(newCards);
+            if (newCards) currentDeck = [...currentDeck, ...newCards];
+        }
+        if (currentDeck.length < currentHandSize) {
+             currentDeck = [...currentDeck, ...shuffleArray(FALLBACK_ANSWERS)];
+        }
+    }
+    const { hand: newHand, remainingDeck } = drawCards(currentDeck, currentHandSize);
+    
+    setSinglePlayerHand(newHand);
+    setCardDeck(remainingDeck);
+    setHasHandRerolled(true);
+    setIsRerollingHand(false);
+  };
 
   const generateAiTopic = async () => {
     if (isGeneratingTopic) return;
@@ -574,6 +643,7 @@ export default function AiOgiriApp() {
     let topic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!topic.includes('{placeholder}')) topic += " {placeholder}";
     
+    // 手動入力で決定したお題は良質とみなして保存
     if (!topicsList.includes(topic)) {
         setTopicsList(prev => [...prev, topic]);
         saveLearnedTopic(topic);
@@ -680,7 +750,7 @@ export default function AiOgiriApp() {
             <div className="space-y-4">
                 <div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p><p className="text-sm">全{TOTAL_ROUNDS_SCORE_ATTACK}回戦の合計得点を競います。大喜利神を目指そう！</p></div>
                 <div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p><p className="text-sm">{SURVIVAL_PASS_SCORE}点未満で即終了。何連勝できるか挑戦！</p></div>
-                <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm">合計{TIME_ATTACK_GOAL_SCORE}点に到達するまでの「回答回数」を競います。（少ないほど凄い！）</p></div>
+                <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm">合計{TIME_ATTACK_GOAL_SCORE}点到達までの「回答回数」を競います。（少ないほど凄い！）</p></div>
                 <div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p><p className="text-sm">お題作成から楽しむ無限モードです。</p></div>
             </div>
           </section>
@@ -704,6 +774,36 @@ export default function AiOgiriApp() {
 
   const TopicDisplay = ({ topic, answer }) => (
     <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg mb-6 relative overflow-hidden min-h-[140px] flex flex-col justify-center">
+      <div className="absolute top-2 right-2 flex gap-2">
+         {/* お題フィードバックボタン（回答フェーズかつお題自動モードのとき） */}
+         {gamePhase === 'answer_input' && gameConfig.mode === 'single' && (
+             <div className="flex gap-1">
+                 {topicFeedback === null ? (
+                    <button 
+                        onClick={() => handleTopicFeedback(true)}
+                        className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/20 hover:bg-green-500/50 text-white transition-all"
+                        title="このお題は良問！"
+                    >
+                        <Star className="w-3 h-3" /> 良問
+                    </button>
+                 ) : (
+                    <span className="text-[10px] px-2 py-1 rounded bg-white/20 text-white flex items-center gap-1">
+                        <Check className="w-3 h-3" /> 評価済
+                    </span>
+                 )}
+                 {gameConfig.singleMode !== 'freestyle' && (
+                     <button 
+                       onClick={handleTopicReroll} 
+                       disabled={hasTopicRerolled || isGeneratingTopic}
+                       className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/20 hover:bg-white/30 text-white transition-all ${hasTopicRerolled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                     >
+                       <RefreshCw className={`w-3 h-3 ${isGeneratingTopic ? 'animate-spin' : ''}`} />
+                       {hasTopicRerolled ? '変更済' : '変更'}
+                     </button>
+                 )}
+             </div>
+         )}
+      </div>
       <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
       <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
       <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
@@ -873,9 +973,29 @@ export default function AiOgiriApp() {
             <TopicDisplay topic={currentTopic} />
             <div className="mb-2"><span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">PLAYER</span><h3 className="text-lg font-bold text-slate-800 inline-block ml-2">{gameConfig.mode === 'single' ? 'あなたの回答' : `${players[turnPlayerIndex].name}の回答`}</h3></div>
             {gameConfig.singleMode === 'time_attack' && (<div className="mb-4 bg-blue-50 border border-blue-200 p-2 rounded-lg flex justify-between items-center text-sm text-blue-800 font-bold"><span>現在: {players[0]?.score || 0}点</span><span>目標: {TIME_ATTACK_GOAL_SCORE}点</span></div>)}
-            <div className="mb-6"><p className="text-xs text-slate-400 mb-2 font-bold flex items-center gap-1"><Layers className="w-3 h-3" />手札から選んで回答</p><div className="grid grid-cols-2 gap-3">{(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((card, idx) => (<Card key={idx} text={card} onClick={() => { if (gameConfig.mode === 'single') handleSingleSubmit(card, false); else { if (window.confirm(`「${card}」で回答しますか？`)) handleMultiSubmit(card); }}} />))}</div></div>
+            
+            <div className="mb-4">
+                <div className="flex justify-between items-end mb-2">
+                    <p className="text-xs text-slate-400 font-bold flex items-center gap-1"><Layers className="w-3 h-3" />手札から選んで回答</p>
+                    {/* リロールボタン群 */}
+                    <div className="flex gap-2">
+                        {gameConfig.mode === 'single' && (
+                             <button 
+                               onClick={handleHandReroll} 
+                               disabled={hasHandRerolled || isRerollingHand}
+                               className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all font-bold border border-indigo-200 ${hasHandRerolled ? 'opacity-50 cursor-not-allowed' : ''}`}
+                             >
+                               <RefreshCw className={`w-3 h-3 ${isRerollingHand ? 'animate-spin' : ''}`} />
+                               {hasHandRerolled ? '交換済み' : '手札全交換 (1回)'}
+                             </button>
+                        )}
+                    </div>
+                </div>
+                <div className="grid grid-cols-2 gap-3">{(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((card, idx) => (<Card key={idx} text={card} onClick={() => { if (gameConfig.mode === 'single') handleSingleSubmit(card, false); else { if (window.confirm(`「${card}」で回答しますか？`)) handleMultiSubmit(card); }}} />))}</div>
+            </div>
+
             <div className="flex items-center gap-4 text-slate-300 mb-6"><div className="h-px bg-slate-200 flex-1"></div><ArrowDown className="w-4 h-4 text-slate-300" /><div className="h-px bg-slate-200 flex-1"></div></div>
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[80px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput, true); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim() || isJudging} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">{isJudging ? 'AIが審査中...' : '送信する'}</button></div>
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[120px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput, true); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim() || isJudging} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">{isJudging ? 'AIが審査中...' : '送信する'}</button></div>
           </div>
         )}
 
