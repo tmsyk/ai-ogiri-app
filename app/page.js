@@ -7,6 +7,7 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- ★重要★ Firebase設定 ---------------------------------------
+// 手順1でコピーした内容に、以下の { ... } の中身を書き換えてください
 const userFirebaseConfig = {
   apiKey: "AIzaSyADNa2ix6NWLt-EEtIbDVTs6qsXsnubn8Y",
   authDomain: "ai-ogiri-app-2026-tmsyk.firebaseapp.com",
@@ -147,6 +148,11 @@ export default function AiOgiriApp() {
   const [singlePlayerHand, setSinglePlayerHand] = useState([]);
   const [singleSelectedCard, setSingleSelectedCard] = useState(null);
 
+  // --- トップへ戻る処理（ReferenceError対策のため手前に配置） ---
+  const handleBackToTitle = () => {
+    if (window.confirm('タイトル画面に戻りますか？\n進行中のゲームデータは失われます。')) setAppMode('title');
+  };
+
   // --- データのロード (Firebase優先、なければLocal) ---
   useEffect(() => {
     // オフライン用のロード
@@ -221,7 +227,6 @@ export default function AiOgiriApp() {
     }
   };
 
-  // 修正: 削除されていた関数を復活
   const resetLearnedData = () => {
     if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？\n（共有データベースは消えません）")) {
       const emptyData = { topics: [], goodAnswers: [] };
@@ -618,8 +623,8 @@ export default function AiOgiriApp() {
           <section>
             <h4 className="font-bold text-lg mb-2 flex items-center gap-2"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4>
             <div className="space-y-4">
-                <div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p><p className="text-sm">全{TOTAL_ROUNDS_SCORE_ATTACK}回戦の合計得点を競います。</p></div>
-                <div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p><p className="text-sm">{SURVIVAL_PASS_SCORE}点未満で即終了。連勝を目指せ！</p></div>
+                <div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p><p className="text-sm">全{TOTAL_ROUNDS_SCORE_ATTACK}回戦の合計得点を競います。大喜利神を目指そう！</p></div>
+                <div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p><p className="text-sm">{SURVIVAL_PASS_SCORE}点未満で即終了。何連勝できるか挑戦！</p></div>
                 <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm">合計{TIME_ATTACK_GOAL_SCORE}点到達までのタイムを競います。</p></div>
                 <div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p><p className="text-sm">制限なしで自由に遊べるモードです。</p></div>
             </div>
@@ -628,6 +633,10 @@ export default function AiOgiriApp() {
             <h4 className="font-bold text-lg mb-2 flex items-center gap-2"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ（2人～）</h4>
             <ul className="list-disc list-inside text-sm space-y-1 bg-amber-50 p-3 rounded-xl"><li>1人が「親」、残りが「子」になります。</li><li>全員回答後、親が一番面白い回答を選びます。</li><li>AIが作った「ダミー回答」が混ざります。親がダミーを選ぶと減点！</li></ul>
           </section>
+          
+          <div className="pt-4 border-t border-slate-200">
+             <div className="flex items-center gap-2 text-xs text-slate-500 bg-slate-50 p-2 rounded"><Brain className="w-4 h-4 text-indigo-500" /><span><span className="font-bold">AI学習機能:</span> あなたが作ったお題や、80点以上の面白い回答はクラウドに保存され、全ユーザーのAIが参考にします。</span></div>
+          </div>
         </div>
         <div className="mt-8 text-center"><button onClick={() => setShowRules(false)} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700 transition-colors">閉じる</button></div>
       </div>
@@ -746,7 +755,7 @@ export default function AiOgiriApp() {
 
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in zoom-in duration-500 text-slate-900">
-        <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mb-6 shadow-lg border-4 border-white"><Trophy className="w-12 h-12 text-yellow-600" /></div>
+        <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mb-6 shadow-lg border-4 border-white">{gameConfig.singleMode === 'survival' ? <Skull className="w-12 h-12 text-slate-700" /> : <Trophy className="w-12 h-12 text-yellow-600" />}</div>
         <h2 className="text-xl font-bold text-slate-500 mb-2">{resultTitle}</h2>
         <div className="text-6xl font-black text-indigo-600 mb-4">{resultMain}</div>
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 w-full max-w-sm mb-4"><p className="text-xl font-bold text-slate-800">{resultSub}</p></div>
@@ -768,6 +777,7 @@ export default function AiOgiriApp() {
              {gameConfig.singleMode === 'freestyle' && <span className="text-green-600 flex items-center gap-1"><Infinity className="w-3 h-3"/> Round {currentRound}</span>}
            </div>)}
            <div className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full ${isAiActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>{isAiActive ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}{isAiActive ? 'ON' : 'OFF'}</div>
+           {players.length > 0 && gameConfig.mode === 'multi' && (<div className="text-xs bg-slate-100 px-2 py-1 rounded-full font-mono flex items-center mr-2 text-slate-900">親: {players[masterIndex].name}</div>)}
           <button onClick={handleBackToTitle} className="flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors"><Home className="w-4 h-4" />トップへ</button>
         </div>
       </header>
@@ -816,39 +826,4 @@ export default function AiOgiriApp() {
         {gamePhase === 'judging' && (
           <div className="animate-in fade-in duration-300">
             {gameConfig.mode === 'single' ? (
-              <div className="flex flex-col items-center justify-center py-20 text-center"><Sparkles className="w-16 h-16 text-amber-500 animate-pulse mb-6" /><h3 className="text-2xl font-bold text-slate-800">審査中...</h3><p className="text-slate-500">{isAiActive ? 'AIが面白さを分析しています' : 'AIはお休み中...ランダムに採点します！'}</p></div>
-            ) : (
-              <div>
-                <div className="bg-amber-500 text-white p-4 rounded-t-2xl text-center"><span className="text-xs font-bold opacity-80 uppercase">JUDGE TIME</span><h2 className="text-xl font-bold">{players[masterIndex].name}さんが選んでください</h2></div>
-                <div className="bg-amber-50 p-4 border-x border-slate-200"><TopicDisplay topic={currentTopic} /></div>
-                <div className="p-4 grid gap-4 pb-20 bg-white rounded-b-2xl shadow-sm border-x border-b border-slate-200"><p className="text-center text-sm text-slate-500 mb-2">一番面白いと思う回答をタップしてください（誰のかは秘密です）</p>{shuffleArray([...submissions]).map((sub, idx) => (<button key={idx} onClick={() => handleJudge(sub)} className="w-full p-6 text-lg font-bold bg-white border-2 border-slate-200 rounded-xl hover:border-amber-500 hover:bg-amber-50 hover:shadow-md transition-all text-left relative overflow-hidden group text-slate-900"><span className="relative z-10">{sub.answerText}</span><div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"><ThumbsUp className="text-amber-500" /></div></button>))}</div>
-              </div>
-            )}
-          </div>
-        )}
-
-        {gamePhase === 'result' && (
-          <div className="animate-in zoom-in duration-300 pb-20">
-            <div className="text-center mb-6"><div className="inline-flex p-4 bg-yellow-100 rounded-full mb-4 shadow-inner"><Trophy className="w-12 h-12 text-yellow-600" /></div><h2 className="text-3xl font-extrabold text-slate-900">{gameConfig.mode === 'single' ? `${selectedSubmission?.score}点！` : '勝者決定！'}</h2></div>
-            <div className="bg-white rounded-3xl shadow-xl overflow-hidden mb-8 border border-slate-100"><div className="bg-slate-900 p-6 text-white text-center"><p className="text-indigo-300 text-sm font-bold mb-2 opacity-75">お題</p><p className="text-lg font-medium opacity-90">{currentTopic.replace('{placeholder}', '___')}</p></div><div className="p-8 text-center bg-gradient-to-b from-white to-slate-50"><p className="text-sm text-slate-400 font-bold mb-2">ベストアンサー</p><p className="text-3xl md:text-4xl font-black text-indigo-600 leading-tight mb-4">{selectedSubmission?.answerText}</p>{gameConfig.mode === 'single' ? (<div className="bg-slate-100 p-4 rounded-xl text-left inline-block max-w-sm"><div className="flex items-center gap-2 mb-1"><Sparkles className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-slate-500">AIコメント</span></div><p className="text-slate-700">「{aiComment}」</p><div className="mt-3 pt-3 border-t border-slate-200"><p className="text-xs text-slate-400 font-bold mb-2 text-center">このツッコミは...</p>{aiFeedback === null ? (<div className="flex justify-center gap-4"><button onClick={() => setAiFeedback('good')} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors"><ThumbsUp className="w-3 h-3" /> ナイス！</button><button onClick={() => setAiFeedback('bad')} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"><ThumbsDown className="w-3 h-3" /> イマイチ</button></div>) : (<p className="text-xs text-center font-bold text-indigo-600 animate-in fade-in">{aiFeedback === 'good' ? 'ありがとうございます！😊' : '精進します...🙇'}</p>)}</div>
-            {gameConfig.singleMode === 'survival' && isSurvivalGameOver && (<div className="mt-4 p-3 bg-red-100 text-red-700 font-bold rounded-lg animate-pulse">⚠️ {SURVIVAL_PASS_SCORE}点未満のため、ゲームオーバー！</div>)}
-            {gameConfig.singleMode === 'time_attack' && finishTime && (<div className="mt-4 p-3 bg-blue-100 text-blue-700 font-bold rounded-lg animate-bounce">🎉 目標達成！ ゴール！</div>)}
-            </div>) : (<div className="animate-bounce-in">
-              {selectedSubmission.isDummy ? (
-                <div className="bg-red-50 p-4 rounded-xl border border-red-200 inline-block"><div className="flex items-center gap-2 justify-center text-red-600 font-bold mb-2"><AlertTriangle className="w-6 h-6" /><span>残念！！</span></div><p className="text-slate-700">それは<span className="font-bold text-red-600">AIが作ったダミー回答</span>でした！</p><p className="text-sm text-slate-500 mt-1">見る目がない親は<span className="font-bold text-red-600 text-lg"> -1点 </span>です！</p></div>
-              ) : (
-                <><p className="text-sm text-slate-400">by</p><p className="text-xl font-bold text-slate-800">{players.find(p => p.id === selectedSubmission?.playerId)?.name}</p><div className="mt-4 inline-block bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-1 rounded-full">次回の親になります</div></>
-              )}
-            </div>)}
-            <div className="mt-8"><button onClick={handleShare} className="flex items-center gap-2 mx-auto px-6 py-3 bg-indigo-50 text-indigo-700 rounded-full font-bold hover:bg-indigo-100 transition-all active:scale-95">{isCopied ? <Check className="w-5 h-5" /> : <Share2 className="w-5 h-5" />}{isCopied ? 'コピーしました！' : '結果をシェアする'}</button></div>
-            </div></div>
-            {gameConfig.mode === 'multi' && (
-              <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-20"><h3 className="text-sm font-bold text-slate-500 mb-3 px-2">現在のスコア</h3><div className="space-y-2">{[...players].sort((a,b) => b.score - a.score).map(p => (<div key={p.id} className="flex justify-between items-center p-3 bg-slate-50 rounded-xl"><div className="flex items-center gap-2">{p.score > 0 && p.score === Math.max(...players.map(pl => pl.score)) && <Trophy className="w-4 h-4 text-yellow-500" />}<span className="font-bold text-slate-700">{p.name}</span></div><span className="font-mono font-bold text-indigo-600">{p.score} pt</span></div>))}</div></div>
-            )}
-            <div className="fixed bottom-6 left-0 right-0 px-4 flex justify-center z-20"><button onClick={nextRound} className="flex items-center gap-2 px-8 py-4 bg-slate-900 text-white rounded-full font-bold text-lg hover:bg-slate-800 hover:scale-105 transition-all shadow-xl"><RotateCcw className="w-5 h-5" />{(gameConfig.mode === 'single' && ((gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS_SCORE_ATTACK) || (gameConfig.singleMode === 'survival' && isSurvivalGameOver) || (gameConfig.singleMode === 'time_attack' && finishTime))) ? '結果発表へ' : '次のラウンドへ'}</button></div>
-          </div>
-        )}
-      </main>
-    </div>
-  );
-}
+              <div className="flex flex-col items-center justify-center py-20 text-center"><Sparkles className="w-16 h-16 text-amber-500 animate-pulse mb-6"
