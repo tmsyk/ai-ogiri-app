@@ -1,14 +1,19 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from 'react';
-// 【修正】History を追加しました
-import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain, Hash, Star, Settings, History } from 'lucide-react';
+import { RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, Infinity, Trash2, Brain, Hash, Star, Settings, History, Info } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-// --- ★重要★ Firebase設定 ---------------------------------------
-// 手順1でコピーした内容に、以下の { ... } の中身を書き換えてください
+// --- バージョン情報 ---
+const APP_VERSION = "Ver 0.01";
+const UPDATE_LOGS = [
+  { version: "Ver 0.01", date: "2026/01/17", content: ["回答の制限時間（30秒）を追加", "お題の変更・手札交換機能を修正", "AIお題の評価ボタンを改善", "アップデート履歴画面を追加"] },
+  { version: "Ver 0.00", date: "2026/01/16", content: ["ベータ版リリース", "スコアアタック等のモード追加", "Firebase連携機能の実装"] },
+];
+
+// --- Firebase設定 ---
 const userFirebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSy...",
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN || "YOUR_PROJECT.firebaseapp.com",
@@ -17,12 +22,12 @@ const userFirebaseConfig = {
   messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || "...",
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID || "..."
 };
-// ---------------------------------------------------------------
 
-// Firebase初期化（エラーガード付き）
+// --- Firebase初期化 ---
 let app, auth, db;
 try {
   const config = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : userFirebaseConfig;
+  // Configが有効かチェック
   const isValidConfig = config && config.apiKey && config.apiKey !== "AIzaSy..." && !config.apiKey.includes("process.env");
 
   if (isValidConfig) {
@@ -51,13 +56,6 @@ const getDocRef = (collectionName, docId) => {
         }
     } catch (e) { return null; }
 };
-
-// --- バージョン情報 ---
-const APP_VERSION = "Ver 0.01";
-const UPDATE_LOGS = [
-  { version: "Ver 0.01", date: "2026/01/17", content: ["回答の制限時間（30秒）を追加", "お題の変更・手札交換機能を修正", "AIお題の評価ボタンを改善", "アップデート履歴画面を追加"] },
-  { version: "Ver 0.00", date: "2026/01/16", content: ["ベータ版リリース", "スコアアタック等のモード追加", "Firebase連携機能の実装"] },
-];
 
 // --- フォールバックデータ ---
 const FALLBACK_TOPICS = [
@@ -105,6 +103,7 @@ const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT_SECONDS = 30;
 
+// --- ユーティリティ ---
 const shuffleArray = (array) => {
   const newArray = [...array];
   for (let i = newArray.length - 1; i > 0; i--) {
@@ -122,6 +121,119 @@ const formatTime = (ms) => {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
 
+// --- サブコンポーネント（メインの外に定義することでエラー回避） ---
+
+const Card = ({ text, isSelected, onClick, disabled }) => (
+  <button 
+    onClick={() => !disabled && onClick(text)}
+    disabled={disabled}
+    className={`
+      relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm
+      flex items-center justify-center text-center h-24 w-full
+      text-sm font-bold leading-snug break-words overflow-hidden text-slate-800
+      ${isSelected 
+        ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' 
+        : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'
+      }
+      ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer'}
+    `}
+  >
+    {text}
+  </button>
+);
+
+const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedback, onReroll, hasRerolled, isGenerating, singleMode }) => (
+  <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg mb-6 relative overflow-hidden min-h-[140px] flex flex-col justify-center transition-all duration-300">
+    <div className="absolute top-2 right-2 flex gap-2 z-20">
+       {gamePhase === 'answer_input' && mode === 'single' && (
+           <div className="flex gap-2">
+               {topicFeedback === null ? (
+                  <button onClick={() => onFeedback(true)} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/10 hover:bg-yellow-400/80 hover:text-yellow-900 text-white transition-all backdrop-blur-sm border border-white/20"><Star className="w-3 h-3" /> 良問</button>
+               ) : ( <span className="text-[10px] px-2 py-1 rounded bg-yellow-400 text-yellow-900 flex items-center gap-1 font-bold animate-in zoom-in"><Check className="w-3 h-3" /> 評価済</span> )}
+               {singleMode !== 'freestyle' && (
+                   <button onClick={onReroll} disabled={hasRerolled || isGenerating} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded backdrop-blur-sm border border-white/20 transition-all ${hasRerolled ? 'bg-slate-700/50 text-slate-400 cursor-not-allowed' : 'bg-white/10 hover:bg-white/30 text-white'}`}><RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />{hasRerolled ? '変更済' : 'お題変更'}</button>
+               )}
+           </div>
+       )}
+    </div>
+    <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
+    <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
+    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
+  </div>
+);
+
+const RankingList = ({ mode, data, unit }) => (
+  <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
+    <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
+    {data && data.length > 0 ? (
+      <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? formatTime(rank.value) : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
+    ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
+  </div>
+);
+
+const HallOfFameModal = ({ onClose, data }) => (
+  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+    <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
+      <div className="text-center mb-6">
+          <h3 className="text-2xl font-black text-yellow-600 flex items-center justify-center gap-2"><Crown className="w-8 h-8" /> 殿堂入りボケ</h3>
+          <p className="text-xs text-slate-400 mt-1">90点以上の爆笑回答ギャラリー</p>
+      </div>
+      <div className="space-y-4">
+          {(!data || data.length === 0) ? (
+              <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p>
+          ) : (
+              data.map((item, i) => (
+                  <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm">
+                      <div className="text-xs text-slate-500 mb-1 flex justify-between">
+                          <span>{item.date} by {item.player}</span>
+                          <span className="font-bold text-yellow-700">{item.score}点</span>
+                      </div>
+                      <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
+                      <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
+                      <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
+                  </div>
+              ))
+          )}
+      </div>
+    </div>
+  </div>
+);
+
+const InfoModal = ({ onClose, type }) => (
+  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+    <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
+      {type === 'rule' && (
+        <div className="space-y-6 text-slate-700">
+          <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><BookOpen className="w-6 h-6" /> 遊び方</h3>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div></div></section>
+        </div>
+      )}
+      {type === 'update' && (
+        <div className="space-y-6 text-slate-700">
+          <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><History className="w-6 h-6" /> 更新履歴</h3>
+          <div className="space-y-4">
+            {UPDATE_LOGS.map((log, i) => (
+              <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
+                <div className="flex items-baseline gap-2 mb-1">
+                  <span className="font-bold text-lg text-slate-800">{log.version}</span>
+                  <span className="text-xs text-slate-400">{log.date}</span>
+                </div>
+                <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5">
+                  {log.content.map((item, j) => <li key={j}>{item}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
+    </div>
+  </div>
+);
+
+// --- メインコンポーネント ---
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
@@ -130,7 +242,7 @@ export default function AiOgiriApp() {
   const [isJudging, setIsJudging] = useState(false);
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [modalType, setModalType] = useState(null);
-  const [showHallOfFame, setShowHallOfFame] = useState(false); // 【修正】これを復活させました
+  const [showHallOfFame, setShowHallOfFame] = useState(false);
   const [aiFeedback, setAiFeedback] = useState(null);
   const [topicFeedback, setTopicFeedback] = useState(null);
   const [userName, setUserName] = useState("あなた");
@@ -206,6 +318,7 @@ export default function AiOgiriApp() {
   useEffect(() => {
     if (!currentUser || !db) return;
 
+    // Firebase同期
     const learnedDocRef = getDocRef('shared_db', 'learned_data');
     if (learnedDocRef) {
         const unsubLearned = onSnapshot(learnedDocRef, (docSnap) => {
@@ -247,6 +360,7 @@ export default function AiOgiriApp() {
     }
   }, [currentUser]);
 
+  // --- 保存関数 ---
   const saveUserName = (name) => {
     setUserName(name);
     localStorage.setItem('aiOgiriUserName', name);
@@ -752,98 +866,14 @@ export default function AiOgiriApp() {
     setGamePhase('result');
   };
 
-  // --- UIコンポーネント ---
-  const HallOfFameModal = () => (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
-        <button onClick={() => setShowHallOfFame(false)} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-        <div className="text-center mb-6">
-            <h3 className="text-2xl font-black text-yellow-600 flex items-center justify-center gap-2"><Crown className="w-8 h-8" /> 殿堂入りボケ</h3>
-            <p className="text-xs text-slate-400 mt-1">90点以上の爆笑回答ギャラリー</p>
-        </div>
-        <div className="space-y-4">
-            {hallOfFame.length === 0 ? (
-                <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p>
-            ) : (
-                hallOfFame.map((item, i) => (
-                    <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm">
-                        <div className="text-xs text-slate-500 mb-1 flex justify-between">
-                            <span>{item.date} by {item.player}</span>
-                            <span className="font-bold text-yellow-700">{item.score}点</span>
-                        </div>
-                        <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
-                        <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
-                        <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
-                    </div>
-                ))
-            )}
-        </div>
-      </div>
-    </div>
-  );
-
-  const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedback, onReroll, hasRerolled, isGenerating, singleMode }) => (
-    <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg mb-6 relative overflow-hidden min-h-[140px] flex flex-col justify-center transition-all duration-300">
-      <div className="absolute top-2 right-2 flex gap-2 z-20">
-         {gamePhase === 'answer_input' && mode === 'single' && (
-             <div className="flex gap-2">
-                 {topicFeedback === null ? (
-                    <button onClick={() => onFeedback(true)} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/10 hover:bg-yellow-400/80 hover:text-yellow-900 text-white transition-all backdrop-blur-sm border border-white/20"><Star className="w-3 h-3" /> 良問</button>
-                 ) : ( <span className="text-[10px] px-2 py-1 rounded bg-yellow-400 text-yellow-900 flex items-center gap-1 font-bold animate-in zoom-in"><Check className="w-3 h-3" /> 評価済</span> )}
-                 {singleMode !== 'freestyle' && (
-                     <button onClick={onReroll} disabled={hasRerolled || isGenerating} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded backdrop-blur-sm border border-white/20 transition-all ${hasRerolled ? 'bg-slate-700/50 text-slate-400 cursor-not-allowed' : 'bg-white/10 hover:bg-white/30 text-white'}`}><RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />{hasRerolled ? '変更済' : 'お題変更'}</button>
-                 )}
-             </div>
-         )}
-      </div>
-      <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
-      <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
-      <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
-    </div>
-  );
-
-  const InfoModal = ({ onClose, type }) => (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-        {type === 'rule' && (
-          <div className="space-y-6 text-slate-700">
-            <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><BookOpen className="w-6 h-6" /> 遊び方</h3>
-            <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div></div></section>
-          </div>
-        )}
-        {type === 'update' && (
-          <div className="space-y-6 text-slate-700">
-            <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><History className="w-6 h-6" /> 更新履歴</h3>
-            <div className="space-y-4">
-              {UPDATE_LOGS.map((log, i) => (
-                <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
-                  <div className="flex items-baseline gap-2 mb-1">
-                    <span className="font-bold text-lg text-slate-800">{log.version}</span>
-                    <span className="text-xs text-slate-400">{log.date}</span>
-                  </div>
-                  <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5">
-                    {log.content.map((item, j) => <li key={j}>{item}</li>)}
-                  </ul>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
-      </div>
-    </div>
-  );
-
+  // --- UI ---
   if (appMode === 'title') {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500 text-slate-900">
         <div className="w-20 h-20 bg-indigo-100 rounded-full flex items-center justify-center mb-6"><Sparkles className="w-10 h-10 text-indigo-600" /></div>
         <h1 className="text-4xl font-extrabold text-slate-900 mb-2">AI大喜利</h1>
         <p className="text-slate-500 mb-8">{APP_VERSION}<br/><span className="text-xs text-indigo-500">Powered by Gemini</span></p>
-        
         <button onClick={() => setModalType('update')} className="text-xs font-bold text-slate-400 hover:text-indigo-600 flex items-center gap-1 mb-6 px-3 py-1 rounded-full border border-slate-200 hover:bg-white transition-colors"><History className="w-3 h-3" /> 更新情報</button>
-
         <div className="grid gap-4 w-full max-w-md mb-8">
           <button onClick={() => { setGameConfig({ mode: 'single', singleMode: 'score_attack', playerCount: 1 }); setAppMode('setup'); }} className="flex items-center justify-center gap-3 p-5 bg-white border-2 border-slate-200 rounded-2xl hover:border-indigo-500 hover:shadow-md transition-all group text-left"><div className="bg-indigo-50 p-3 rounded-full group-hover:bg-indigo-100"><User className="w-6 h-6 text-indigo-600" /></div><div><div className="font-bold text-slate-900">一人で遊ぶ</div><div className="text-xs text-slate-500">4つのモードでAIに挑戦</div></div></button>
           <button onClick={() => { setGameConfig({ mode: 'multi', playerCount: 3 }); setAppMode('setup'); }} className="flex items-center justify-center gap-3 p-5 bg-white border-2 border-slate-200 rounded-2xl hover:border-amber-500 hover:shadow-md transition-all group text-left"><div className="bg-amber-50 p-3 rounded-full group-hover:bg-amber-100"><Users className="w-6 h-6 text-amber-600" /></div><div><div className="font-bold text-slate-900">みんなで遊ぶ</div><div className="text-xs text-slate-500">スマホ1台を回して対戦</div></div></button>
@@ -853,7 +883,7 @@ export default function AiOgiriApp() {
             <button onClick={() => setShowHallOfFame(true)} className="text-sm font-bold text-yellow-600 hover:text-yellow-700 flex items-center gap-2 px-4 py-2 rounded-full bg-yellow-50 hover:bg-yellow-100 transition-colors"><Crown className="w-4 h-4" /> 殿堂入り</button>
         </div>
         {modalType && <InfoModal onClose={() => setModalType(null)} type={modalType} />}
-        {showHallOfFame && <HallOfFameModal />}
+        {showHallOfFame && <HallOfFameModal onClose={() => setShowHallOfFame(false)} data={hallOfFame} />}
       </div>
     );
   }
@@ -899,31 +929,33 @@ export default function AiOgiriApp() {
     );
   }
 
-  // 結果画面等は前回と同じロジックなので省略せずそのまま記述
   if (gamePhase === 'final_result') {
     const player = players[0];
-    let resultTitle = "", resultMain = "", resultSub = "";
+    let resultTitle = "", resultMain = "", resultSub = "", rankingList = null;
     if (gameConfig.singleMode === 'score_attack') {
         resultTitle = `全${TOTAL_ROUNDS_SCORE_ATTACK}回戦 終了！`;
         resultMain = `${player.score}点`;
         let rank = player.score >= 450 ? "お笑い神" : player.score >= 400 ? "大御所" : player.score >= 300 ? "真打ち" : "見習い";
         resultSub = `称号：${rank}`;
+        rankingList = <RankingList mode="score_attack" data={rankings.score_attack} unit="点" />;
     } else if (gameConfig.singleMode === 'survival') {
         resultTitle = "GAME OVER...";
         resultMain = `${currentRound - 1}連勝`;
         resultSub = `スコア: ${player.score}点`;
+        rankingList = <RankingList mode="survival" data={rankings.survival} unit="連勝" />;
     } else if (gameConfig.singleMode === 'time_attack') {
         resultTitle = "GOAL!!";
         resultMain = `${answerCount}回`;
         resultSub = `合計スコア: ${player.score}点`;
+        rankingList = <RankingList mode="time_attack" data={rankings.time_attack} unit="回" />;
     }
-
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in zoom-in duration-500 text-slate-900">
         <div className="w-24 h-24 bg-yellow-100 rounded-full flex items-center justify-center mb-6 shadow-lg border-4 border-white">{gameConfig.singleMode === 'survival' ? <Skull className="w-12 h-12 text-slate-700" /> : <Trophy className="w-12 h-12 text-yellow-600" />}</div>
         <h2 className="text-xl font-bold text-slate-500 mb-2">{resultTitle}</h2>
         <div className="text-6xl font-black text-indigo-600 mb-4">{resultMain}</div>
         <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 w-full max-w-sm mb-4"><p className="text-xl font-bold text-slate-800">{resultSub}</p></div>
+        <div className="w-full max-w-sm mb-8">{rankingList}</div>
         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700 shadow-xl transition-all active:scale-95">タイトルへ戻る</button>
       </div>
     );
@@ -941,7 +973,6 @@ export default function AiOgiriApp() {
              {gameConfig.singleMode === 'freestyle' && <span className="text-green-600 flex items-center gap-1"><Infinity className="w-3 h-3"/> Round {currentRound}</span>}
            </div>)}
            <div className={`flex items-center gap-1 text-[10px] font-bold px-2 py-1 rounded-full ${isAiActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>{isAiActive ? <Wifi className="w-3 h-3" /> : <WifiOff className="w-3 h-3" />}{isAiActive ? 'ON' : 'OFF'}</div>
-           {players.length > 0 && gameConfig.mode === 'multi' && (<div className="text-xs bg-slate-100 px-2 py-1 rounded-full font-mono flex items-center mr-2 text-slate-900">親: {players[masterIndex].name}</div>)}
           <button onClick={handleBackToTitle} className="flex items-center gap-1 text-xs font-bold text-slate-500 hover:text-indigo-600 px-3 py-1.5 rounded-lg hover:bg-slate-100 transition-colors"><Home className="w-4 h-4" />トップへ</button>
         </div>
       </header>
@@ -971,7 +1002,6 @@ export default function AiOgiriApp() {
             <div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full border border-slate-100">
               <div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 text-amber-600">{turnPlayerIndex === masterIndex ? <Eye className="w-8 h-8" /> : <PenTool className="w-8 h-8" />}</div>
               <h2 className="text-2xl font-bold text-slate-800 mb-2">次は {players[turnPlayerIndex].name} さんの番です</h2>
-              <p className="text-slate-500 mb-8">{turnPlayerIndex === masterIndex ? '全員の回答が出揃いました！親に端末を渡してください。' : '他の人に見えないように端末を受け取ってください。'}</p>
               <button onClick={() => turnPlayerIndex === masterIndex ? startJudging() : setGamePhase('answer_input')} className="w-full py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transform transition active:scale-95">{turnPlayerIndex === masterIndex ? '審査を始める（ダミーが混ざります！）' : '回答する'}</button>
             </div>
           </div>
@@ -981,7 +1011,6 @@ export default function AiOgiriApp() {
           <div className="animate-in slide-in-from-bottom-4 duration-300">
             <TopicDisplay topic={currentTopic} answer={null} gamePhase={gamePhase} mode={gameConfig.mode} topicFeedback={topicFeedback} onFeedback={handleTopicFeedback} onReroll={handleTopicReroll} hasRerolled={hasTopicRerolled} isGenerating={isGeneratingTopic} singleMode={gameConfig.singleMode} />
             <div className="mb-2"><span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">PLAYER</span><h3 className="text-lg font-bold text-slate-800 inline-block ml-2">{gameConfig.mode === 'single' ? 'あなたの回答' : `${players[turnPlayerIndex].name}の回答`}</h3></div>
-            {/* タイマーバー */}
             {isAiActive && gameConfig.mode === 'single' && (
                 <div className="mb-4">
                     <div className="flex justify-between text-xs font-bold text-slate-500 mb-1"><span>残り時間</span><span className={`${timeLeft <= 5 ? 'text-red-600 animate-pulse' : ''}`}>{timeLeft}秒</span></div>
@@ -990,7 +1019,7 @@ export default function AiOgiriApp() {
             )}
             <div className="mb-6"><div className="flex justify-between items-end mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><Layers className="w-3 h-3" />手札から選んで回答</p>{gameConfig.mode === 'single' && (<button onClick={handleHandReroll} disabled={hasHandRerolled || isRerollingHand} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all font-bold border border-indigo-200 ${hasHandRerolled ? 'opacity-50 cursor-not-allowed' : ''}`}><RefreshCw className={`w-3 h-3 ${isRerollingHand ? 'animate-spin' : ''}`} />{hasHandRerolled ? '交換済み' : '手札全交換 (1回)'}</button>)}</div><div className="grid grid-cols-2 gap-3">{(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((card, idx) => (<Card key={idx} text={card} onClick={() => { if (gameConfig.mode === 'single') handleSingleSubmit(card, false); else { if (window.confirm(`「${card}」で回答しますか？`)) handleMultiSubmit(card); }}} />))}</div></div>
             <div className="flex items-center gap-4 text-slate-300 mb-6"><div className="h-px bg-slate-200 flex-1"></div><ArrowDown className="w-4 h-4 text-slate-300" /><div className="h-px bg-slate-200 flex-1"></div></div>
-            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[80px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput, true); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim() || isJudging} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">{isJudging ? 'AIが審査中...' : '送信する'}</button></div>
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[120px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput, true); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim() || isJudging} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">{isJudging ? 'AIが審査中...' : '送信する'}</button></div>
           </div>
         )}
 
