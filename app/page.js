@@ -7,11 +7,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- バージョン情報 ---
-const APP_VERSION = "Ver 0.06";
+const APP_VERSION = "Ver 0.05";
 const UPDATE_LOGS = [
-  { version: "Ver 0.06", date: "2026/01/20", content: ["手札交換を高速化", "手札交換の回数制限を復活", "AIカード生成ロジックの最適化", "バグ修正"] },
-  { version: "Ver 0.05", date: "2026/01/20", content: ["カード多様化", "設定ボタン追加", "UI改善"] },
-  { version: "Ver 0.04", date: "2026/01/19", content: ["マルチプレイ強化", "フリースタイル時間無制限", "殿堂入り改善"] },
+  { version: "Ver 0.05", date: "2026/01/20", content: ["カード多様化：過去の回答傾向への依存を削除し、ランダム性を向上", "設定ボタン追加：音量や名前をいつでも変更可能に", "UI改善：スマホでのボタン表示崩れを修正", "手札交換：回数制限を撤廃（何度でも交換可能）"] },
+  { version: "Ver 0.04", date: "2026/01/19", content: ["マルチプレイ：全員の名前設定、10点先取ルール、親ランダム決定を追加", "フリースタイル：時間制限を撤廃", "殿堂入り：高得点順に上位20件のみ表示", "お題作成：AI提案回数を制限"] },
 ];
 
 // --- Firebase設定 ---
@@ -575,14 +574,22 @@ export default function AiOgiriApp() {
     const prompt = `大喜利のお題を1つ作成してください。【重要】1.問いは一つに絞る。2.回答は「名詞」カードで行う。3.穴埋め{placeholder}は文末付近に配置。出力: {"topic": "..."} ${referenceText}`;
     return (await callGemini(prompt, "あなたは大喜利の司会者です。問いを一つに絞り、名詞で答えさせるプロフェッショナルです。"))?.topic || null;
   };
+  
   const fetchAiCards = async (count = 10) => {
-    const referenceAnswers = shuffleArray(learnedData.goodAnswers).slice(0, 5).join(", ");
-    const referenceText = referenceAnswers ? `ユーザーが好む回答の傾向（参考）: ${referenceAnswers}` : "";
-    const prompt = `大喜利の回答カード（単語・短いフレーズ）を${count}個作成してください。条件: 1.名詞または体言止め。2.具体的で情景が浮かぶ言葉。出力: {"answers": ["...", ...] } ${referenceText}`;
-    const result = await callGemini(prompt, "あなたは構成作家です。具体的なモノの名前を挙げるのが得意です。");
+    const prompt = `
+      大喜利の回答カードとして使える、「ユニークで面白い名詞」や「短いフレーズ」を${count}個作成してください。
+      条件:
+      1. 全て「名詞」または「体言止め」で終わること。
+      2. 具体的で情景が浮かぶような言葉を選ぶこと。
+      3. **ジャンルを毎回バラバラにしてください（食べ物、歴史上の人物、日用品、概念、インターネット用語など）。**
+      4. 既存のありふれた回答は避け、意外性のある単語を含めてください。
+      5. 出力はJSON形式で {"answers": ["回答1", "回答2", ...]} のみにすること。
+    `;
+    const result = await callGemini(prompt, "あなたは引き出しの多い構成作家です。多様なジャンルの言葉を知っています。");
     if (result?.answers) saveGeneratedCards(result.answers);
     return result?.answers || null;
   };
+
   const fetchAiJudgment = async (topic, answer, isManual) => {
     let prompt = isManual ? 
         `お題: ${topic} 回答: ${answer} 1.不適切チェック(NGならisInappropriate:true) 2.5項目(意外性,文脈,瞬発力,毒気,知性)を1-5点で評価 3.採点(0-100) 4.20文字以内のツッコミ 出力: {"score": 数値, "comment": "...", "isInappropriate": bool, "radar": {...}}` :
@@ -603,7 +610,7 @@ export default function AiOgiriApp() {
     if (isAiActive && cardDeck.length === 0) {
         let baseCards = [...FALLBACK_ANSWERS];
         if (learnedData.cardPool && learnedData.cardPool.length > 0) {
-            const poolSamples = shuffleArray(learnedData.cardPool).slice(0, 60); // プールから60枚
+            const poolSamples = shuffleArray(learnedData.cardPool).slice(0, 60); 
             baseCards = [...baseCards, ...poolSamples];
         }
         setCardDeck(shuffleArray(baseCards));
@@ -627,15 +634,18 @@ export default function AiOgiriApp() {
 
     if (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
 
-    // --- デッキ初期化：必ずリフレッシュ ---
     let initialDeck = [];
     let poolCards = [...FALLBACK_ANSWERS];
     if (learnedData.cardPool && learnedData.cardPool.length > 0) poolCards = [...poolCards, ...learnedData.cardPool];
     initialDeck = shuffleArray(poolCards).slice(0, 60);
 
     if (isAiActive) {
-      // 待たずにバックグラウンドで補充
-      fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
+      fetchAiCards(10).then(aiCards => { 
+          if (aiCards) {
+              addCardsToDeck(aiCards); 
+              setCardDeck(prev => shuffleArray([...prev, ...aiCards]));
+          }
+      });
     }
     setCardDeck(initialDeck);
 
@@ -783,7 +793,6 @@ export default function AiOgiriApp() {
     playSound('card');
     if (hasHandRerolled || isRerollingHand) return;
     setIsRerollingHand(true);
-    // 交換中はタイマーストップ
     setIsTimerRunning(false);
 
     const currentHandSize = singlePlayerHand.length;
@@ -791,7 +800,6 @@ export default function AiOgiriApp() {
     let pool = [...FALLBACK_ANSWERS];
     if (learnedData.cardPool?.length > 0) pool = [...pool, ...learnedData.cardPool];
     
-    // 足りなければ補充（API待たずにプールから）
     if (currentDeck.length < currentHandSize) {
         if (isAiActive) {
             const newCards = await fetchAiCards(8);
@@ -808,8 +816,6 @@ export default function AiOgiriApp() {
     setIsRerollingHand(false);
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-    
-    // バックグラウンドで補充
     if (isAiActive) fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
   };
 
