@@ -15,8 +15,8 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 // --- 設定・定数 ---
 const APP_VERSION = "Ver 0.11";
 const UPDATE_LOGS = [
-  { version: "Ver 0.11", date: "2026/01/21", content: ["重大な進行不能バグを修正", "ゲームオーバー判定処理の修正", "設定画面の動作安定化"] },
-  { version: "Ver 0.10", date: "2026/01/21", content: ["システム全体のリファクタリング", "ルール画面・設定画面の修正", "ゲーム開始処理の改善"] },
+  { version: "Ver 0.11", date: "2026/01/21", content: ["起動エラーを修正", "全機能を統合・安定化"] },
+  { version: "Ver 0.10", date: "2026/01/21", content: ["UI反応速度の向上", "効果音処理の最適化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -119,7 +119,6 @@ const playSynthSound = (type, volume) => {
 };
 
 // --- Sub Components ---
-
 const ModalBase = ({ onClose, title, icon: Icon, children }) => (
   <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
     <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
@@ -231,7 +230,7 @@ const InfoModal = ({ onClose, type }) => (
              </div>
           </section>
           <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと減点！</li></ul></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点！</li></ul></section>
         </div>
       ) : (
         <div className="space-y-4">
@@ -248,6 +247,7 @@ const InfoModal = ({ onClose, type }) => (
 
 // --- メインアプリ ---
 export default function AiOgiriApp() {
+  // State
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
@@ -302,6 +302,9 @@ export default function AiOgiriApp() {
   const [hallOfFame, setHallOfFame] = useState([]);
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
+  // Add state for topicsList
+  const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
+  const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
 
   // Modals
   const [activeModal, setActiveModal] = useState(null);
@@ -389,6 +392,7 @@ export default function AiOgiriApp() {
       const emptyData = { topics: [], answers: [], pool: [] };
       setLearned(emptyData);
       localStorage.removeItem('aiOgiriLearnedData');
+      setTopicsList([...FALLBACK_TOPICS]);
       playSound('timeup');
       alert("リセットしました。");
     }
