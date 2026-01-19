@@ -12,14 +12,13 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-// --- バージョン情報 ---
-const APP_VERSION = "Ver 0.12";
+// --- 設定・定数 ---
+const APP_VERSION = "Ver 0.13";
 const UPDATE_LOGS = [
+  { version: "Ver 0.13", date: "2026/01/21", content: ["入力エラー(ReferenceError)の修正", "関数定義の重複を解消"] },
   { version: "Ver 0.12", date: "2026/01/21", content: ["進行不能バグを完全修正", "ロジックの統合・安定化"] },
-  { version: "Ver 0.10", date: "2026/01/21", content: ["システム全体のリファクタリング", "ルール画面・設定画面の修正"] },
 ];
 
-// --- 定数 ---
 const TOTAL_ROUNDS = 5;
 const SURVIVAL_PASS_SCORE = 60;
 const TIME_ATTACK_GOAL_SCORE = 500;
@@ -247,6 +246,7 @@ const InfoModal = ({ onClose, type }) => (
 
 // --- メインアプリ ---
 export default function AiOgiriApp() {
+  // State
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
@@ -301,7 +301,6 @@ export default function AiOgiriApp() {
   const [hallOfFame, setHallOfFame] = useState([]);
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
-  // Add state for topicsList
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
 
@@ -517,63 +516,14 @@ export default function AiOgiriApp() {
           setMasterIndex(Math.floor(Math.random() * gameConfig.playerCount));
       }
       
-      // setTimeoutを使わず、状態更新完了後にuseEffectでstartRoundを呼ぶ形にするか、
-      // ここで直接startNewRoundを呼ぶ（状態更新が反映される前なので引数で渡す）
-      // 簡易的にsetTimeoutで実行
-      setTimeout(() => startNewRound(initialPlayers, (gameConfig.mode === 'single' ? 0 : masterIndex)), 500);
+      setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
 
-  const startNewRound = async (currentPlayers, nextMasterIdx) => {
-      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
-      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHandRerolled(false); setRerollCount(0);
-      setTurnIdx(nextMasterIdx); 
-      setMasterIndex(nextMasterIdx);
-      setPhase('drawing'); 
-      setTopicCreateRerollCount(0); 
-      setTimeLeft(timeLimit); setIsTimerActive(false);
-
-      // 手札補充 (currentPlayersのhandは既に前のラウンドのもの)
-      // シングルなら自分の手札、マルチなら全員の手札を確認して補充
-      let newPlayers = [...currentPlayers];
+  const startRound = (turn) => {
+      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopic(''); setManualAnswer('');
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHandRerolled(false); setTopicCreateRerollCount(0);
+      setTurnIdx(turn); 
       
-      const draw = (d, n) => {
-          const h = []; const rest = [...d];
-          for(let i=0; i<n; i++) {
-              if (rest.length===0) rest.push(...FALLBACK_ANSWERS);
-              h.push(rest.shift());
-          }
-          return { h, rest };
-      };
-
-      // デッキ取得（ステートからだと古い可能性があるので、ここでも管理が必要だが、簡易的にステート使用）
-      let currentDeck = [...deck];
-      if (currentDeck.length < 20) {
-          let pool = [...FALLBACK_ANSWERS];
-          if (learned.pool) pool = [...pool, ...learned.pool];
-          currentDeck = [...currentDeck, ...shuffleArray(pool)];
-      }
-
-      if (gameConfig.mode === 'single') {
-          // シングルの場合、players[0]が自分
-          const myHand = newPlayers[0].hand.filter(c => c !== null); // 使用済みを除外
-          const { h: drawn, rest: d2 } = draw(currentDeck, 7 - myHand.length);
-          newPlayers[0].hand = [...myHand, ...drawn];
-          setSinglePlayerHand(newPlayers[0].hand);
-          currentDeck = d2;
-      } else {
-          // マルチの場合
-          newPlayers = newPlayers.map(p => {
-             const cleanHand = p.hand.filter(c => c !== null);
-             const { h: drawn, rest: d3 } = draw(currentDeck, 7 - cleanHand.length);
-             currentDeck = d3;
-             return { ...p, hand: [...cleanHand, ...drawn] };
-          });
-      }
-      
-      setPlayers(newPlayers);
-      setDeck(currentDeck);
-
-      // お題決定フェーズへ移行
       if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
           generateTopic(true);
       } else {
@@ -590,14 +540,14 @@ export default function AiOgiriApp() {
           setTopic(t); setPhase('answer_input'); setTimeLeft(timeLimit); 
           if (gameConfig.singleMode !== 'freestyle') setIsTimerActive(true);
       } else {
-          setManualTopicInput(t.replace('{placeholder}', '___'));
+          setManualTopic(t.replace('{placeholder}', '___'));
       }
       setIsGenerating(false);
   };
 
   const confirmTopic = () => {
       playSound('decision');
-      const t = manualTopicInput.replace(/___+/g, '{placeholder}');
+      const t = manualTopic.replace(/___+/g, '{placeholder}');
       setTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
       if (gameConfig.mode === 'single') {
           setPhase('answer_input'); setTimeLeft(timeLimit); 
@@ -629,7 +579,7 @@ export default function AiOgiriApp() {
       
       if (radar) {
           updateUserStats(score, radar);
-          setGameRadars(prev => [...prev, radar]);
+          setGameRadars(prev => [...prev, radar]); // 今回のゲーム用に蓄積
       }
 
       if (score >= HALL_OF_FAME_THRESHOLD) {
@@ -671,7 +621,8 @@ export default function AiOgiriApp() {
       
       setRound(r => r + 1);
       const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
-      startNewRound(players, nextMaster);
+      setMasterIndex(nextMaster);
+      startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
   };
 
   const rerollHand = () => {
@@ -686,10 +637,8 @@ export default function AiOgiriApp() {
   
   const handleMultiSubmit = (text) => {
       setSubmissions(prev => [...prev, { playerId: players[turnIdx].id, answerText: text }]);
-      // 手札から削除
-      setPlayers(prev => prev.map(p => p.id === players[turnIdx].id ? { ...p, hand: p.hand.map(c => c === text ? null : c) } : p));
-      
-      setManualAnswerInput('');
+      setPlayers(prev => prev.map(p => p.id === players[turnIdx].id ? { ...p, hand: p.hand.filter(c => c !== text) } : p));
+      setManualAnswer('');
       const nextTurn = (turnIdx + 1) % players.length;
       if (nextTurn === masterIndex) { 
           let dummy = deck[0] || "ダミー";
@@ -771,16 +720,111 @@ export default function AiOgiriApp() {
     let topic = await fetchAiTopic();
     if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
     const displayTopic = topic.replace(/\{placeholder\}/g, "___");
-    setManualTopicInput(displayTopic);
+    setManualTopic(displayTopic);
     setLastAiGeneratedTopic(displayTopic);
     setTopicCreateRerollCount(prev => prev + 1);
     setIsGenerating(false);
+  };
+
+  const confirmTopic = async () => {
+    playSound('decision');
+    if (!manualTopic.trim()) return;
+    const isAiOrigin = manualTopic === lastAiGeneratedTopic;
+    if (!isAiOrigin) {
+        setIsCheckingTopic(true);
+        if (await checkContentSafety(manualTopic)) {
+            playSound('timeup');
+            alert("⚠️ AI判定：不適切な表現が含まれています。");
+            setIsCheckingTopic(false);
+            return;
+        }
+        setIsCheckingTopic(false);
+    }
+    let topic = manualTopic.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
+    if (!topic.includes('{placeholder}')) topic += " {placeholder}";
+    if (!topicsList.includes(topic)) {
+        setTopicsList(prev => [...prev, topic]);
+        saveLearnedTopic(topic);
+    }
+    setCurrentTopic(topic);
+    if (gameConfig.mode === 'single') {
+        setPhase('answer_input');
+        if (gameConfig.singleMode !== 'freestyle') setIsTimerActive(true);
+    } else prepareNextSubmitter(masterIndex, masterIndex, players);
+  };
+
+  const handleSingleSubmit = async (text, isManual = false) => {
+    if (!text || isJudging) return;
+    playSound('decision');
+    setIsTimerActive(false);
+    setIsJudging(true);
+    if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
+
+    const result = await fetchAiJudgment(currentTopic, text, isManual);
+    if (result && result.isInappropriate) {
+        playSound('timeup');
+        alert("⚠️ AI判定：不適切な表現が含まれています。");
+        setIsJudging(false);
+        setIsTimerActive(true);
+        return;
+    }
+    setSingleSelectedCard(text);
+    setPhase('judging');
+    let score = 0;
+    if (result) {
+        setAiComment(result.comment);
+        score = result.score;
+        if (result.radar) updateUserStats(score, result.radar);
+        if (score >= HALL_OF_FAME_THRESHOLD) {
+            saveToHallOfFame({
+                topic: currentTopic.replace('{placeholder}', '___'),
+                answer: text,
+                score: score,
+                comment: result.comment,
+                radar: result.radar,
+                player: userName,
+                date: new Date().toLocaleDateString()
+            });
+            saveLearnedAnswer(text);
+        } else if (score >= HIGH_SCORE_THRESHOLD) {
+            saveLearnedAnswer(text);
+        }
+    } else {
+        score = Math.floor(Math.random() * 40) + 40;
+        setAiComment(FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)]);
+    }
+    setPlayers(prev => {
+        const newP = [...prev];
+        newP[0].score += score;
+        if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setIsSurvivalGameOver(true);
+        if (gameConfig.singleMode === 'time_attack' && newP[0].score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
+        return newP;
+    });
+    setSelectedSubmission({ answerText: text, score, radar: result?.radar });
+    playSound('result');
+    setIsJudging(false);
+    setPhase('result');
   };
 
   const handleTopicFeedback = (isGood) => {
     playSound('tap');
     setTopicFeedback(isGood ? 'good' : 'bad');
     if (isGood && currentTopic) saveLearnedTopic(currentTopic);
+  };
+  const handleAiFeedback = (isGood) => {
+    playSound('tap');
+    setAiFeedback(isGood ? 'good' : 'bad');
+    if (isGood && selectedSubmission?.answerText) saveLearnedAnswer(selectedSubmission.answerText);
+  };
+  const handleShare = () => {
+    const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
+  };
+  
+  const prepareNextSubmitter = (current, master, currentPlayers) => {
+    const next = (current + 1) % currentPlayers.length;
+    if (next === master) { setPhase('turn_change'); setTurnPlayerIndex(master); }
+    else { setTurnPlayerIndex(next); setPhase('turn_change'); }
   };
 
   // --- Render ---
@@ -970,7 +1014,7 @@ export default function AiOgiriApp() {
           )}
 
           {/* モーダル群 */}
-          {activeModal === 'settings' && <SettingsModal onClose={() => setActiveModal(null)} userName={userName} setUserName={saveUserName} timeLimit={timeLimit} setTimeLimit={(t)=>{setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit',t)}} volume={volume} setVolume={(v)=>{setVolume(v); localStorage.setItem('aiOgiriVolume',v);}} playSound={playSound} resetLearnedData={resetLearnedData} />}
+          {activeModal === 'settings' && <SettingsModal onClose={() => setActiveModal(null)} userName={userName} setUserName={saveUserName} timeLimit={timeLimit} setTimeLimit={saveTimeLimit} volume={volume} setVolume={saveVolume} playSound={playSound} resetLearnedData={resetLearnedData} />}
           {activeModal === 'rule' && <InfoModal onClose={() => setActiveModal(null)} type="rule" />}
           {activeModal === 'update' && <InfoModal onClose={() => setActiveModal(null)} type="update" />}
           {activeModal === 'hall' && <HallOfFameModal onClose={() => setActiveModal(null)} data={hallOfFame} />}
