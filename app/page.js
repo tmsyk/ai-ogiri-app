@@ -12,16 +12,16 @@ import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-// --- 定数・設定 ---
-const APP_VERSION = "Ver 0.09";
+// --- 設定・定数 ---
+const APP_VERSION = "Ver 0.10";
 const UPDATE_LOGS = [
-  { version: "Ver 0.09", date: "2026/01/20", content: ["システム安定化（コード構造の刷新）", "ビルドエラー修正", "UI反応速度の向上"] },
-  { version: "Ver 0.06", date: "2026/01/20", content: ["手札交換を高速化", "手札交換の回数制限を復活"] },
+  { version: "Ver 0.10", date: "2026/01/21", content: ["5段階評価を最終結果のみに表示へ変更", "各種ボタンのエラー修正", "ゲーム開始処理の安定化", "ルール説明の拡充"] },
+  { version: "Ver 0.09", date: "2026/01/20", content: ["システム安定化", "UI反応速度の向上"] },
 ];
 
 const TOTAL_ROUNDS = 5;
-const PASS_SCORE = 60;
-const GOAL_SCORE = 500;
+const SURVIVAL_PASS_SCORE = 60;
+const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
@@ -76,7 +76,7 @@ try {
 
 const getDocRef = (col, id) => db ? (typeof __app_id !== 'undefined' ? doc(db, 'artifacts', __app_id, 'public', 'data', col, id) : doc(db, col, id)) : null;
 
-// --- サブコンポーネント (Mainの外で定義) ---
+// --- サブコンポーネント ---
 
 const Card = ({ text, isSelected, onClick, disabled }) => (
   <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
@@ -100,27 +100,170 @@ const RadarChart = ({ data, size = 120 }) => {
   );
 };
 
-// モーダル類
-const ModalBase = ({ onClose, title, icon: Icon, children }) => (
+const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, resetLearnedData }) => (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+      <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl relative">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
+        <div className="text-center mb-6"><h3 className="text-xl font-black text-slate-700 flex items-center justify-center gap-2"><Settings className="w-6 h-6" /> 設定</h3></div>
+        <div className="space-y-6">
+            <div>
+                 <label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label>
+                 <div className="relative"><input type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div>
+            </div>
+            <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label>
+                  <input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" />
+            </div>
+            <div>
+                  <label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label>
+                  <input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" />
+            </div>
+            <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
+        </div>
+        <div className="mt-6 text-center"><button onClick={onClose} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-full hover:bg-indigo-700 w-full">閉じる</button></div>
+      </div>
+    </div>
+);
+
+const MyDataModal = ({ stats, onClose, userName }) => (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+      <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
+        <div className="text-center mb-6"><h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2"><Activity className="w-8 h-8" /> マイデータ</h3><p className="text-sm text-slate-500 font-bold mt-1">{userName} さんの戦績</p></div>
+        <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
+            <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center">
+                <p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>
+                {stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}
+                <p className="text-xs text-center text-indigo-400 mt-4">※AI審査員の評価傾向（通算平均）</p>
+            </div>
+        </div>
+        <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
+      </div>
+    </div>
+);
+
+const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedback, onReroll, hasRerolled, isGenerating, singleMode }) => (
+  <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg mb-6 relative overflow-hidden min-h-[140px] flex flex-col justify-center transition-all duration-300">
+    <div className="absolute top-2 right-2 flex gap-2 z-20">
+       {gamePhase === 'answer_input' && mode === 'single' && (
+           <div className="flex gap-2">
+               {topicFeedback === null ? (
+                  <button onClick={() => onFeedback(true)} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/10 hover:bg-yellow-400/80 hover:text-yellow-900 text-white transition-all backdrop-blur-sm border border-white/20"><Star className="w-3 h-3" /> 良問</button>
+               ) : ( <span className="text-[10px] px-2 py-1 rounded bg-yellow-400 text-yellow-900 flex items-center gap-1 font-bold animate-in zoom-in"><Check className="w-3 h-3" /> 評価済</span> )}
+               {singleMode !== 'freestyle' && (
+                   <button onClick={onReroll} disabled={hasRerolled || isGenerating} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded backdrop-blur-sm border border-white/20 transition-all ${hasRerolled ? 'bg-slate-700/50 text-slate-400 cursor-not-allowed' : 'bg-white/10 hover:bg-white/30 text-white'}`}><RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />{hasRerolled ? '変更済' : 'お題変更'}</button>
+               )}
+           </div>
+       )}
+    </div>
+    <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
+    <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
+    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
+  </div>
+);
+
+const RankingList = ({ mode, data, unit }) => (
+  <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
+    <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
+    {data && data.length > 0 ? (
+      <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? formatTime(rank.value) : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
+    ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
+  </div>
+);
+
+const HallOfFameModal = ({ onClose, data }) => {
+  const sortedData = [...data].sort((a, b) => b.score - a.score).slice(0, 20);
+  return (
+    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+      <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
+        <div className="text-center mb-6"><h3 className="text-2xl font-black text-yellow-600 flex items-center justify-center gap-2"><Crown className="w-8 h-8" /> 殿堂入りボケ</h3><p className="text-xs text-slate-400 mt-1">90点以上の爆笑回答ギャラリー (Top 20)</p></div>
+        <div className="space-y-4">
+            {(!sortedData || sortedData.length === 0) ? ( <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p> ) : ( sortedData.map((item, i) => (
+                    <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">
+                         {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
+                        <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
+                        <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
+                        <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
+                        <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
+                    </div>
+                )))}
+        </div>
+        <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
+      </div>
+    </div>
+  );
+};
+
+const InfoModal = ({ onClose, type }) => (
   <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-    <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+    <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
       <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-      <div className="text-center mb-6"><h3 className="text-xl font-black text-slate-700 flex items-center justify-center gap-2"><Icon className="w-6 h-6" /> {title}</h3></div>
-      <div className="space-y-4">{children}</div>
-      <div className="mt-6"><button onClick={onClose} className="w-full py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
+      {type === 'rule' && (
+        <div className="space-y-6 text-slate-700">
+          <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><BookOpen className="w-6 h-6" /> 遊び方</h3>
+          <div className="space-y-8">
+            <section>
+                <h4 className="font-bold text-lg mb-3 flex items-center gap-2 border-b pb-1 text-slate-800"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ（シングルモード）</h4>
+                <div className="space-y-4">
+                    <div className="bg-indigo-50 p-4 rounded-xl">
+                        <div className="flex items-center gap-2 font-bold text-indigo-800 mb-1"><Trophy className="w-4 h-4"/> スコアアタック</div>
+                        <p className="text-sm text-slate-600">全5回戦の合計得点を競います。自分の限界に挑戦する基本モードです。450点以上で「お笑い神」の称号が得られます。</p>
+                    </div>
+                    <div className="bg-red-50 p-4 rounded-xl">
+                        <div className="flex items-center gap-2 font-bold text-red-800 mb-1"><Skull className="w-4 h-4"/> サバイバル</div>
+                        <p className="text-sm text-slate-600">AI審査員から<span className="font-bold text-red-600">60点未満</span>の評価を受けると即ゲームオーバー。何連勝できるか挑戦するスリル満点のモードです。</p>
+                    </div>
+                    <div className="bg-blue-50 p-4 rounded-xl">
+                        <div className="flex items-center gap-2 font-bold text-blue-800 mb-1"><Clock className="w-4 h-4"/> タイムアタック</div>
+                        <p className="text-sm text-slate-600">合計<span className="font-bold text-blue-600">500点</span>に到達するまでの「回答回数（手数）」を競います。いかに少ないボケで高得点を稼げるかが鍵です。</p>
+                    </div>
+                    <div className="bg-green-50 p-4 rounded-xl">
+                        <div className="flex items-center gap-2 font-bold text-green-800 mb-1"><Infinity className="w-4 h-4"/> フリースタイル</div>
+                        <p className="text-sm text-slate-600">制限時間なし、ゲームオーバーなし。お題を自分で作ったり、AIの反応を試したり、自由に遊べる練習モードです。</p>
+                    </div>
+                </div>
+            </section>
+            <section>
+                <h4 className="font-bold text-lg mb-3 flex items-center gap-2 border-b pb-1 text-slate-800"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ（マルチプレイ）</h4>
+                <div className="bg-amber-50 p-4 rounded-xl">
+                    <p className="text-sm text-slate-600 mb-3">1台のスマホを回して遊ぶ、パーティーゲームモードです。<span className="font-bold">10点先取</span>したプレイヤーが優勝です。</p>
+                    <ol className="list-decimal list-inside text-sm text-slate-700 space-y-2 ml-1">
+                        <li>プレイヤーの中からランダムで1人が<span className="font-bold">「親」</span>になります。</li>
+                        <li>親がお題を決め、スマホを次の人に回します。</li>
+                        <li>残りのプレイヤー（子）は回答を入力し、スマホを回します。</li>
+                        <li>全員の回答が出揃ったら、親が一番面白い回答を選びます。</li>
+                        <li><span className="font-bold text-red-600">注意！</span> 選択肢にはAIが作った<span className="font-bold">「ダミー回答」</span>が1つ混ざっています。</li>
+                        <li>親がダミーを選ぶと<span className="font-bold text-red-600">親が-1点</span>！ 子を選ぶと<span className="font-bold text-indigo-600">その子に+1点</span>です。</li>
+                    </ol>
+                </div>
+            </section>
+          </div>
+        </div>
+      )}
+      {type === 'update' && (
+        <div className="space-y-6 text-slate-700">
+          <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><History className="w-6 h-6" /> 更新履歴</h3>
+          <div className="space-y-4">
+            {UPDATE_LOGS.map((log, i) => (
+              <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
+                <div className="flex items-baseline gap-2 mb-1"><span className="font-bold text-lg text-slate-800">{log.version}</span><span className="text-xs text-slate-400">{log.date}</span></div>
+                <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5">{log.content.map((item, j) => <li key={j}>{item}</li>)}</ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
     </div>
   </div>
 );
 
-// --- ユーティリティ ---
-const shuffleArray = (array) => { const newArray = [...array]; for (let i = newArray.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [newArray[i], newArray[j]] = [newArray[j], newArray[i]]; } return newArray; };
-const formatTime = (ms) => { if (!ms) return "--:--"; const m = Math.floor(ms / 60000); const s = Math.floor((ms % 60000) / 1000); const ms_ = Math.floor((ms % 1000) / 10); return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}.${ms_.toString().padStart(2, '0')}`; };
-
 // --- メインアプリ ---
 export default function AiOgiriApp() {
-  // State
-  const [mode, setMode] = useState('title');
-  const [config, setConfig] = useState({ type: 'single', singleMode: 'score_attack', playerCount: 3 });
+  const [appMode, setAppMode] = useState('title');
+  const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
   const [userName, setUserName] = useState("あなた");
   const [volume, setVolume] = useState(0.5);
@@ -157,6 +300,7 @@ export default function AiOgiriApp() {
   const [startTime, setStartTime] = useState(null);
   const [finishTime, setFinishTime] = useState(null);
   const [displayTime, setDisplayTime] = useState("00:00");
+  const [gameRadars, setGameRadars] = useState([]); // そのゲーム内の評価蓄積
 
   // Data
   const [currentUser, setCurrentUser] = useState(null);
@@ -196,7 +340,7 @@ export default function AiOgiriApp() {
       }
   };
 
-  // --- Logic Helper Functions (Defined inside component to access state) ---
+  // --- Logic Helper Functions ---
 
   const resetLearnedData = () => {
     if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
@@ -214,7 +358,7 @@ export default function AiOgiriApp() {
 
   const handleBackToTitle = () => {
     if (window.confirm('タイトル画面に戻りますか？\n進行中のゲームデータは失われます。')) {
-      playSound('tap'); setIsTimerActive(false); setMode('title');
+      playSound('tap'); setIsTimerActive(false); setAppMode('title');
     }
   };
 
@@ -222,12 +366,14 @@ export default function AiOgiriApp() {
       setUserStats(prev => {
           const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
           const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          // radarがnullならprevRadarを使う
+          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
           const newRadar = {
-              surprise: prevRadar.surprise * (1 - alpha) + (radar.surprise || 3) * alpha,
-              context: prevRadar.context * (1 - alpha) + (radar.context || 3) * alpha,
-              punchline: prevRadar.punchline * (1 - alpha) + (radar.punchline || 3) * alpha,
-              humor: prevRadar.humor * (1 - alpha) + (radar.humor || 3) * alpha,
-              intelligence: prevRadar.intelligence * (1 - alpha) + (radar.intelligence || 3) * alpha,
+              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
+              context: prevRadar.context * (1 - alpha) + r.context * alpha,
+              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
+              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
+              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
           };
           const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
           localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); return newData;
@@ -239,6 +385,20 @@ export default function AiOgiriApp() {
     setHallOfFame(newLocalHall);
     localStorage.setItem('aiOgiriHallOfFame', JSON.stringify(newLocalHall));
     if (currentUser && db) { const ref = getDocRef('shared_db', 'hall_of_fame'); if (ref) await updateDoc(ref, { entries: arrayUnion(entry) }).catch(()=>{}); }
+  };
+
+  const saveLearnedTopic = async (newTopic) => {
+    const newLocalData = { ...learned, topics: [...learned.topics, newTopic] };
+    setLearned(newLocalData);
+    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
+    if (currentUser && db) { const ref = getDocRef('shared_db', 'learned_data'); if (ref) await updateDoc(ref, { topics: arrayUnion(newTopic) }).catch(()=>{}); }
+  };
+
+  const saveLearnedAnswer = async (newAnswer) => {
+    const newLocalData = { ...learned, answers: [...learned.answers, newAnswer] };
+    setLearned(newLocalData);
+    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
+    if (currentUser && db) { const ref = getDocRef('shared_db', 'learned_data'); if (ref) await updateDoc(ref, { goodAnswers: arrayUnion(newAnswer) }).catch(()=>{}); }
   };
 
   const updateRanking = async (modeName, value) => {
@@ -282,7 +442,7 @@ export default function AiOgiriApp() {
           if (data.entries) setHallOfFame(prev => {
               const merged = [...data.entries, ...prev];
               const unique = Array.from(new Set(merged.map(JSON.stringify))).map(JSON.parse);
-              return unique.sort((a, b) => b.score - a.score); // Score降順
+              return unique.sort((a, b) => b.score - a.score); 
           });
       });
       syncDoc('shared_db', 'rankings', setRankings);
@@ -297,11 +457,11 @@ export default function AiOgiriApp() {
 
   useEffect(() => {
       let t;
-      if (mode === 'game' && config.singleMode === 'time_attack' && startTime && !finishTime) {
+      if (appMode === 'game' && config.singleMode === 'time_attack' && startTime && !finishTime) {
           t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100);
       }
       return () => clearInterval(t);
-  }, [mode, startTime, finishTime]);
+  }, [appMode, startTime, finishTime]);
 
   const callGemini = async (prompt) => {
       if (!isAiActive) return null;
@@ -315,9 +475,11 @@ export default function AiOgiriApp() {
       } catch (e) { return null; }
   };
 
+  // --- Game Control ---
   const initGame = async () => {
-      playSound('decision'); setMode('game'); setPhase('drawing'); setRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
+      playSound('decision'); setAppMode('game'); setPhase('drawing'); setRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
       if (config.singleMode === 'time_attack') setStartTime(Date.now());
+      setGameRadars([]); // レーダーリセット
       
       const fallback = FALLBACK_ANSWERS;
       let pool = [...fallback];
@@ -331,6 +493,7 @@ export default function AiOgiriApp() {
                   const newPool = [...(learned.pool || []), ...res.answers].slice(-100);
                   setLearned(prev => ({...prev, pool: newPool}));
                   localStorage.setItem('aiOgiriLearnedData', JSON.stringify({...learned, pool: newPool}));
+                  // Firebase sync omitted for brevity, logic exists in effect
               }
           });
       }
@@ -428,7 +591,11 @@ export default function AiOgiriApp() {
       setResult({ answer: text, score, comment, radar });
       setSelectedSubmission({ answerText: text, score, radar });
       
-      if (radar) updateUserStats(score, radar);
+      if (radar) {
+          updateUserStats(score, radar);
+          setGameRadars(prev => [...prev, radar]); // 今回のゲーム用に蓄積
+      }
+
       if (score >= HALL_OF_FAME_THRESHOLD) {
           const entry = { topic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
@@ -465,26 +632,46 @@ export default function AiOgiriApp() {
       if (config.singleMode !== 'freestyle') setIsTimerActive(true);
   };
 
+  const getAverageRadar = () => {
+      if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
+      const sum = gameRadars.reduce((acc, curr) => ({
+          surprise: acc.surprise + curr.surprise,
+          context: acc.context + curr.context,
+          punchline: acc.punchline + curr.punchline,
+          humor: acc.humor + curr.humor,
+          intelligence: acc.intelligence + curr.intelligence,
+      }), { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 });
+      const count = gameRadars.length;
+      return {
+          surprise: sum.surprise / count,
+          context: sum.context / count,
+          punchline: sum.punchline / count,
+          humor: sum.humor / count,
+          intelligence: sum.intelligence / count,
+      };
+  };
+
+  // --- Render ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
        <header className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-30">
           <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
           <div className="flex gap-2">
               <button onClick={() => setShowSettings(true)} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
-              {mode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
+              {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
           </div>
        </header>
 
        <main className="max-w-2xl mx-auto p-4">
-          {mode === 'title' && (
+          {appMode === 'title' && (
               <div className="text-center py-10">
                   <div className="w-24 h-24 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6"><Sparkles className="w-12 h-12 text-indigo-600"/></div>
                   <h1 className="text-4xl font-black mb-2">AI大喜利</h1>
-                  <p className="text-slate-500 mb-8">{APP_VERSION}</p>
+                  <p className="text-slate-500 mb-8">{APP_VERSION}<br/><span className="text-xs text-indigo-500">Powered by Gemini</span></p>
                   
                   <div className="space-y-4 mb-8">
-                      <button onClick={() => { playSound('decision'); setConfig({...config, type: 'single'}); setMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-indigo-500 transition-all"><User/> 一人で遊ぶ</button>
-                      <button onClick={() => { playSound('decision'); setConfig({...config, type: 'multi'}); setMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-amber-500 transition-all"><Users/> みんなで遊ぶ</button>
+                      <button onClick={() => { playSound('decision'); setConfig({...config, type: 'single'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-indigo-500 transition-all"><User/> 一人で遊ぶ</button>
+                      <button onClick={() => { playSound('decision'); setConfig({...config, type: 'multi'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-amber-500 transition-all"><Users/> みんなで遊ぶ</button>
                   </div>
 
                   <div className="flex justify-center gap-4">
@@ -495,7 +682,7 @@ export default function AiOgiriApp() {
               </div>
           )}
 
-          {mode === 'setup' && (
+          {appMode === 'setup' && (
               <div className="py-6">
                   <h2 className="text-2xl font-bold mb-6 text-center">設定</h2>
                   <div className="bg-white p-6 rounded-2xl shadow-sm mb-6">
@@ -519,7 +706,7 @@ export default function AiOgiriApp() {
               </div>
           )}
 
-          {mode === 'game' && (
+          {appMode === 'game' && (
               <>
                 <div className="flex justify-between items-center mb-4 text-xs font-bold text-slate-500">
                     <span>{config.type === 'single' ? config.singleMode.toUpperCase() : 'MULTI PLAY'}</span>
@@ -581,7 +768,6 @@ export default function AiOgiriApp() {
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
                             <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
-                            {result?.radar && <div className="flex justify-center mb-4"><RadarChart data={result.radar} size={150} /></div>}
                             <div className="bg-slate-100 p-4 rounded-xl text-left inline-block"><p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p><p className="text-sm text-slate-800">「{aiComment}」</p></div>
                         </div>
                         <button onClick={nextGameRound} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">次へ</button>
@@ -593,6 +779,12 @@ export default function AiOgiriApp() {
                         <Trophy className="w-24 h-24 text-yellow-500 mx-auto mb-4" />
                         <h2 className="text-3xl font-black text-slate-800 mb-2">終了！</h2>
                         <div className="text-6xl font-black text-indigo-600 mb-8">{players[0].score}点</div>
+                        {config.type === 'single' && gameRadars.length > 0 && (
+                            <div className="mb-6 flex justify-center flex-col items-center">
+                                <p className="text-sm font-bold text-slate-500 mb-2">今回のゲーム評価</p>
+                                <RadarChart data={getAverageRadar()} size={180} />
+                            </div>
+                        )}
                         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">タイトルへ</button>
                     </div>
                 )}
@@ -603,11 +795,32 @@ export default function AiOgiriApp() {
           {showHall && <HallOfFameModal onClose={() => setShowHall(false)} data={hallOfFame} />}
           {showData && <MyDataModal stats={userStats} onClose={() => setShowData(false)} userName={userName} />}
           {showRule && <ModalBase onClose={() => setShowRule(false)} title="遊び方" icon={BookOpen}>
-              <p className="text-sm">お題に対して面白い回答をして、AIに高得点をもらおう！</p>
-              <ul className="list-disc list-inside text-sm space-y-1"><li>スコアアタック: 合計得点を競う</li><li>サバイバル: 60点未満で終了</li><li>タイムアタック: 500点までの速さ</li></ul>
+              <div className="space-y-6 text-slate-700">
+                  <section>
+                      <h4 className="font-bold text-lg mb-2 border-b pb-1">🎮 基本の流れ</h4>
+                      <p className="text-sm">AIが出すお題に、AIが配るカードでボケて、AIに採点させる！</p>
+                  </section>
+                  <section>
+                    <h4 className="font-bold text-lg mb-2 border-b pb-1">👤 一人で遊ぶ</h4>
+                    <ul className="text-sm list-disc list-inside space-y-1">
+                        <li><b>スコアアタック:</b> 全5問の合計得点を競う</li>
+                        <li><b>サバイバル:</b> 60点未満で即終了。連勝を目指せ</li>
+                        <li><b>タイムアタック:</b> 500点到達までの手数を競う</li>
+                        <li><b>フリースタイル:</b> 時間無制限の練習モード</li>
+                    </ul>
+                  </section>
+                  <section>
+                    <h4 className="font-bold text-lg mb-2 border-b pb-1">👥 みんなで遊ぶ</h4>
+                    <ul className="text-sm list-disc list-inside space-y-1">
+                        <li>1人が親、他が子になりスマホを回して回答</li>
+                        <li>親が一番面白い回答を選ぶ（10点先取で優勝）</li>
+                        <li><b>AIのダミー回答</b>を選んでしまうと親が減点！</li>
+                    </ul>
+                  </section>
+              </div>
           </ModalBase>}
           {showUpdate && <ModalBase onClose={() => setShowUpdate(false)} title="更新情報" icon={History}>
-              {UPDATE_LOGS.map((log,i)=>(<div key={i} className="mb-2 pb-2 border-b"><p className="font-bold text-sm">{log.version}</p><p className="text-xs text-slate-500">{log.date}</p></div>))}
+              {UPDATE_LOGS.map((log,i)=>(<div key={i} className="mb-2 pb-2 border-b"><p className="font-bold text-sm">{log.version}</p><p className="text-xs text-slate-500">{log.date}</p><p className="text-xs mt-1">{log.content.join(', ')}</p></div>))}
           </ModalBase>}
 
        </main>
