@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.11";
+const APP_VERSION = "Ver 0.12";
 const UPDATE_LOGS = [
-  { version: "Ver 0.11", date: "2026/01/21", content: ["起動エラーを修正", "全機能を統合・安定化"] },
-  { version: "Ver 0.10", date: "2026/01/21", content: ["UI反応速度の向上", "効果音処理の最適化"] },
+  { version: "Ver 0.12", date: "2026/01/21", content: ["変数名の不整合バグを修正", "タイマー動作の修正", "ゲームオーバー判定の修正"] },
+  { version: "Ver 0.10", date: "2026/01/21", content: ["システム全体のリファクタリング", "ルール画面・設定画面の修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -278,14 +278,14 @@ export default function AiOgiriApp() {
   const [isJudging, setIsJudging] = useState(false);
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [timeLeft, setTimeLeft] = useState(30);
-  const [isTimerActive, setIsTimerActive] = useState(false);
+  const [isTimerActive, setIsTimerActive] = useState(false); // タイマー制御フラグ（統一）
   const [hasTopicRerolled, setHasTopicRerolled] = useState(false);
   const [hasHandRerolled, setHasHandRerolled] = useState(false);
   const [isRerollingHand, setIsRerollingHand] = useState(false);
   const [topicCreateRerollCount, setTopicCreateRerollCount] = useState(0);
   const [topicFeedback, setTopicFeedback] = useState(null);
   const [aiFeedback, setAiFeedback] = useState(null);
-  const [survivalOver, setSurvivalOver] = useState(false);
+  const [isSurvivalGameOver, setIsSurvivalGameOver] = useState(false); // 名前修正済み
   const [answerCount, setAnswerCount] = useState(0);
   const [startTime, setStartTime] = useState(null);
   const [finishTime, setFinishTime] = useState(null);
@@ -593,7 +593,7 @@ export default function AiOgiriApp() {
       // 注意: isSurvivalGameOver は次の描画で反映されるため、ここでは即時判定用フラグを使う
       let isGameOver = false;
       if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
-          setSurvivalGameOver(true);
+          setIsSurvivalGameOver(true);
           isGameOver = true;
       }
       if (gameConfig.singleMode === 'time_attack') {
@@ -619,7 +619,7 @@ export default function AiOgiriApp() {
       playSound('tap');
       if (gameConfig.mode === 'single') {
           if (gameConfig.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setPhase('final_result'); }
-          if (gameConfig.singleMode === 'survival' && survivalOver) { updateRanking('survival', round - 1); return setPhase('final_result'); }
+          if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', round - 1); return setPhase('final_result'); }
           if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setPhase('final_result'); }
       } else {
           if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setPhase('final_result');
@@ -826,7 +826,7 @@ export default function AiOgiriApp() {
                         <button onClick={nextGameRound} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">
                             {/* 次へボタンの表示制御（勝利判定など） */}
                             {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) ? '結果発表へ' :
-                             (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && survivalOver) ? '結果発表へ' :
+                             (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
                              (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
                              (gameConfig.mode === 'multi' && players.some(p => p.score >= WIN_SCORE_MULTI)) ? '結果発表へ' : '次のラウンドへ'}
                         </button>
