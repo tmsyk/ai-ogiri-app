@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.10";
+const APP_VERSION = "Ver 0.11";
 const UPDATE_LOGS = [
-  { version: "Ver 0.10", date: "2026/01/21", content: ["システム全体のリファクタリング", "変数名の不整合バグを修正", "ゲーム開始処理の改善"] },
-  { version: "Ver 0.09", date: "2026/01/20", content: ["UI反応速度の向上", "効果音処理の最適化"] },
+  { version: "Ver 0.11", date: "2026/01/21", content: ["重大な進行不能バグを修正", "ゲームオーバー判定処理の修正", "設定画面の動作安定化"] },
+  { version: "Ver 0.10", date: "2026/01/21", content: ["システム全体のリファクタリング", "ルール画面・設定画面の修正", "ゲーム開始処理の改善"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -119,58 +119,75 @@ const playSynthSound = (type, volume) => {
 };
 
 // --- Sub Components ---
+
+const ModalBase = ({ onClose, title, icon: Icon, children }) => (
+  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
+    <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
+      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
+      <div className="text-center mb-6"><h3 className="text-xl font-black text-slate-700 flex items-center justify-center gap-2"><Icon className="w-6 h-6" /> {title}</h3></div>
+      <div className="space-y-4">{children}</div>
+      <div className="mt-6"><button onClick={onClose} className="w-full py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
+    </div>
+  </div>
+);
+
 const Card = ({ text, isSelected, onClick, disabled }) => (
   <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
 );
 
 const RadarChart = ({ data, size = 120 }) => {
-  const radius = size / 2; const center = size / 2; const maxVal = 5;
-  const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
-  const getPoint = (value, index, total) => { const angle = (Math.PI * 2 * index) / total - Math.PI / 2; const r = (value / maxVal) * radius * 0.8; return { x: center + r * Math.cos(angle), y: center + r * Math.sin(angle) }; };
-  const points = keys.map((key, i) => getPoint(data[key] || 0, i, 5));
-  const pointsStr = points.map(p => `${p.x},${p.y}`).join(" ");
-  const bgLevels = [5, 4, 3, 2, 1];
+  const r = size / 2, c = size / 2, max = 5;
+  const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
+  const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"];
+  const getP = (v, i) => ({ x: c + (v / max) * r * 0.8 * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + (v / max) * r * 0.8 * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) });
+  const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {bgLevels.map(level => { const bgPoints = keys.map((_, i) => getPoint(level, i, 5)).map(p => `${p.x},${p.y}`).join(" "); return <polygon key={level} points={bgPoints} fill="none" stroke="#e2e8f0" strokeWidth="1" />; })}
-        {keys.map((_, i) => { const p = getPoint(5, i, 5); return <line key={i} x1={center} y1={center} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
-        <polygon points={pointsStr} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {keys.map((_, i) => { const p = getPoint(6.5, i, 5); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        {[5, 4, 3, 2, 1].map(l => <polygon key={l} points={keys.map((_, i) => getP(l, i).x + "," + getP(l, i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />)}
+        {keys.map((_, i) => { const p = getP(5, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
+        {keys.map((_, i) => { const p = getP(6.5, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
       </svg>
     </div>
   );
 };
 
 const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, resetLearnedData }) => (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-        <div className="text-center mb-6"><h3 className="text-xl font-black text-slate-700 flex items-center justify-center gap-2"><Settings className="w-6 h-6" /> 設定</h3></div>
-        <div className="space-y-6">
-            <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
-            <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" /></div>
-            <div><label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label><input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" /></div>
-            <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
-        </div>
-        <div className="mt-6 text-center"><button onClick={onClose} className="px-8 py-3 bg-indigo-600 text-white font-bold rounded-full hover:bg-indigo-700 w-full">閉じる</button></div>
-      </div>
-    </div>
+  <ModalBase onClose={onClose} title="設定" icon={Settings}>
+      <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
+      <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" /></div>
+      <div><label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label><input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" /></div>
+      <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
+  </ModalBase>
 );
 
 const MyDataModal = ({ stats, onClose, userName }) => (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-        <div className="text-center mb-6"><h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2"><Activity className="w-8 h-8" /> マイデータ</h3><p className="text-sm text-slate-500 font-bold mt-1">{userName} さんの戦績</p></div>
-        <div className="space-y-6">
-            <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-            <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
-        </div>
-        <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
-      </div>
-    </div>
+  <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
+      <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
+      <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+  </ModalBase>
 );
+
+const HallOfFameModal = ({ onClose, data }) => {
+  const sortedData = [...data].sort((a, b) => b.score - a.score).slice(0, 20);
+  return (
+    <ModalBase onClose={onClose} title="殿堂入りボケ" icon={Crown}>
+        <div className="space-y-4">
+            {(!sortedData || sortedData.length === 0) ? ( <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p> ) : ( sortedData.map((item, i) => (
+                    <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">
+                         {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
+                        <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
+                        <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
+                        <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
+                        <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
+                    </div>
+                )))}
+        </div>
+    </ModalBase>
+  );
+};
 
 const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedback, onReroll, hasRerolled, isGenerating, singleMode }) => (
   <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg mb-6 relative overflow-hidden min-h-[140px] flex flex-col justify-center transition-all duration-300">
@@ -201,78 +218,32 @@ const RankingList = ({ mode, data, unit }) => (
   </div>
 );
 
-const HallOfFameModal = ({ onClose, data }) => {
-  const sortedData = [...data].sort((a, b) => b.score - a.score).slice(0, 20);
-  return (
-    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-      <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-        <div className="text-center mb-6"><h3 className="text-2xl font-black text-yellow-600 flex items-center justify-center gap-2"><Crown className="w-8 h-8" /> 殿堂入りボケ</h3><p className="text-xs text-slate-400 mt-1">90点以上の爆笑回答ギャラリー (Top 20)</p></div>
-        <div className="space-y-4">
-            {(!sortedData || sortedData.length === 0) ? ( <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p> ) : ( sortedData.map((item, i) => (
-                    <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">
-                         {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
-                        <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
-                        <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
-                        <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
-                        <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
-                    </div>
-                )))}
-        </div>
-        <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
-      </div>
-    </div>
-  );
-};
-
 const InfoModal = ({ onClose, type }) => (
-  <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 p-4 animate-in fade-in">
-    <div className="bg-white rounded-3xl p-6 max-w-lg w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
-      <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
-      {type === 'rule' && (
+  <ModalBase onClose={onClose} title={type === 'rule' ? "遊び方" : "更新履歴"} icon={type === 'rule' ? BookOpen : History}>
+      {type === 'rule' ? (
         <div className="space-y-6 text-slate-700">
-          <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><BookOpen className="w-6 h-6" /> 遊び方</h3>
-          <div className="space-y-8">
-            <section>
-                <h4 className="font-bold text-lg mb-3 flex items-center gap-2 border-b pb-1 text-slate-800"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4>
-                <div className="space-y-3">
-                    <div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p><p className="text-sm text-slate-600">全5回戦の合計得点を競います。</p></div>
-                    <div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p><p className="text-sm text-slate-600">60点未満で即終了。連勝記録を目指します。</p></div>
-                    <div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p><p className="text-sm text-slate-600">500点到達までの「回答回数」を競います。</p></div>
-                    <div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p><p className="text-sm text-slate-600">制限なしの練習モード。</p></div>
-                </div>
-            </section>
-            <section>
-                <h4 className="font-bold text-lg mb-3 flex items-center gap-2 border-b pb-1 text-slate-800"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4>
-                <div className="bg-amber-50 p-4 rounded-xl">
-                    <ul className="list-disc list-inside text-sm text-slate-700 space-y-2">
-                        <li>1人が親、他が子になりスマホを回して回答。</li>
-                        <li>親が一番面白い回答を選びます。</li>
-                        <li><span className="font-bold text-red-500">AIのダミー回答</span>が1つ混ざります。</li>
-                        <li>親がダミーを選ぶと<span className="font-bold">親が-1点</span>！</li>
-                        <li>10点先取で優勝！</li>
-                    </ul>
-                </div>
-            </section>
-          </div>
+          <section className="bg-slate-50 p-4 rounded-xl mb-4 border border-slate-200">
+             <h4 className="font-bold text-lg mb-2 text-center text-slate-800">🎮 基本の流れ</h4>
+             <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-600">
+               <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><MessageSquare className="w-5 h-5 text-indigo-500" /></div><p>AIがお題<br/>を作成</p></div><div className="h-0.5 w-4 bg-slate-300"></div>
+               <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Layers className="w-5 h-5 text-green-500" /></div><p>AIのカード<br/>から選ぶ</p></div><div className="h-0.5 w-4 bg-slate-300"></div>
+               <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Sparkles className="w-5 h-5 text-yellow-500" /></div><p>AIが採点<br/>＆ツッコミ</p></div>
+             </div>
+          </section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと減点！</li></ul></section>
         </div>
-      )}
-      {type === 'update' && (
-        <div className="space-y-6 text-slate-700">
-          <h3 className="text-2xl font-black text-indigo-600 flex items-center justify-center gap-2 mb-4"><History className="w-6 h-6" /> 更新履歴</h3>
-          <div className="space-y-4">
+      ) : (
+        <div className="space-y-4">
             {UPDATE_LOGS.map((log, i) => (
               <div key={i} className="border-l-4 border-indigo-200 pl-4 py-1">
                 <div className="flex items-baseline gap-2 mb-1"><span className="font-bold text-lg text-slate-800">{log.version}</span><span className="text-xs text-slate-400">{log.date}</span></div>
                 <ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5">{log.content.map((item, j) => <li key={j}>{item}</li>)}</ul>
               </div>
             ))}
-          </div>
         </div>
       )}
-      <div className="mt-8 text-center"><button onClick={onClose} className="px-8 py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
-    </div>
-  </div>
+  </ModalBase>
 );
 
 // --- メインアプリ ---
@@ -290,13 +261,14 @@ export default function AiOgiriApp() {
   const [deck, setDeck] = useState([]);
   const [hand, setHand] = useState([]);
   const [players, setPlayers] = useState([]);
-  const [masterIdx, setMasterIdx] = useState(0);
+  const [masterIdx, setMasterIndex] = useState(0);
   const [turnIdx, setTurnIdx] = useState(0);
   const [topic, setTopic] = useState('');
   const [manualTopic, setManualTopic] = useState('');
   const [manualAnswer, setManualAnswer] = useState('');
   const [selectedCard, setSelectedCard] = useState(null);
   const [submissions, setSubmissions] = useState([]);
+  const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [result, setResult] = useState(null); 
   const [aiComment, setAiComment] = useState('');
   
@@ -318,7 +290,7 @@ export default function AiOgiriApp() {
   const [startTime, setStartTime] = useState(null);
   const [finishTime, setFinishTime] = useState(null);
   const [displayTime, setDisplayTime] = useState("00:00");
-  const [gameRadars, setGameRadars] = useState([]); 
+  const [gameRadars, setGameRadars] = useState([]);
   const [isCopied, setIsCopied] = useState(false);
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
   const [singlePlayerHand, setSinglePlayerHand] = useState([]);
@@ -336,6 +308,7 @@ export default function AiOgiriApp() {
 
   // Audio Context
   const audioCtx = useRef(null);
+
   const playSound = (type) => {
       if (volume <= 0 || typeof window === 'undefined') return;
       if (!audioCtx.current) {
@@ -444,36 +417,24 @@ export default function AiOgiriApp() {
 
   // --- Effects ---
   useEffect(() => {
-      const load = (key) => { const v = localStorage.getItem(key); return v ? JSON.parse(v) : null; };
-      setUserStats(load('aiOgiriUserStats') || { playCount: 0, maxScore: 0, averageRadar: {} });
-      setHallOfFame(load('aiOgiriHallOfFame') || []);
-      setRankings(load('aiOgiriRankings') || { score_attack: [], survival: [], time_attack: [] });
-      setLearned(load('aiOgiriLearnedData') || { topics: [], answers: [], pool: [] });
-      
-      const u = localStorage.getItem('aiOgiriUserName'); if(u) setUserName(u);
-      const v = localStorage.getItem('aiOgiriVolume'); if(v) setVolume(parseFloat(v));
-      const t = localStorage.getItem('aiOgiriTimeLimit'); if(t) setTimeLimit(parseInt(t));
-
-      if (auth) { signInAnonymously(auth).catch(()=>{}); onAuthStateChanged(auth, u => setCurrentUser(u)); }
+    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
+    const localLearned = localStorage.getItem('aiOgiriLearnedData'); if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); if (parsed.cardPool) parsed.cardPool.forEach(c => usedCardsRef.current.add(c)); }
+    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
+    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
+    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
+    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
+    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
+    if (auth) { signInAnonymously(auth).catch(()=>{}); onAuthStateChanged(auth, u => setCurrentUser(u)); }
   }, []);
 
   useEffect(() => {
-      if (!currentUser || !db) return;
-      const syncDoc = (col, docName, setter, merge = false) => {
-          const ref = getDocRef(col, docName);
-          if (ref) onSnapshot(ref, s => {
-              if (s.exists()) setter(prev => merge ? { ...prev, ...s.data() } : s.data());
-              else setDoc(ref, {}).catch(()=>{});
-          });
-      };
-      syncDoc('shared_db', 'hall_of_fame', (data) => {
-          if (data.entries) setHallOfFame(prev => {
-              const merged = [...data.entries, ...prev];
-              const unique = Array.from(new Set(merged.map(JSON.stringify))).map(JSON.parse);
-              return unique.sort((a, b) => b.score - a.score); 
-          });
-      });
-      syncDoc('shared_db', 'rankings', setRankings);
+    if (!currentUser || !db) return;
+    const learnedDocRef = getDocRef('shared_db', 'learned_data');
+    if (learnedDocRef) onSnapshot(learnedDocRef, (docSnap) => { if (docSnap.exists()) { const data = docSnap.data(); setLearned(prev => ({ ...prev, topics: data.topics || [], goodAnswers: data.goodAnswers || [], cardPool: data.cardPool || [] })); if (data.topics) setTopicsList(prev => Array.from(new Set([...FALLBACK_TOPICS, ...data.topics]))); } else { setDoc(learnedDocRef, { topics: [], goodAnswers: [], cardPool: [] }).catch(() => {}); } });
+    const hallDocRef = getDocRef('shared_db', 'hall_of_fame');
+    if (hallDocRef) onSnapshot(hallDocRef, (docSnap) => { if (docSnap.exists()) { const data = docSnap.data(); if (data.entries) setHallOfFame(prev => { const merged = [...data.entries, ...prev]; const unique = Array.from(new Set(merged.map(JSON.stringify))).map(JSON.parse); return unique.sort((a, b) => b.score - a.score); }); } else { setDoc(hallDocRef, { entries: [] }).catch(() => {}); } });
+    const rankingDocRef = getDocRef('shared_db', 'rankings');
+    if (rankingDocRef) onSnapshot(rankingDocRef, (docSnap) => { if (docSnap.exists()) setRankings(docSnap.data()); });
   }, [currentUser]);
 
   useEffect(() => {
@@ -615,25 +576,38 @@ export default function AiOgiriApp() {
       
       setAiComment(comment);
       
-      if (radar) setGameRadars(prev => [...prev, radar]);
-      if (radar) updateUserStats(score, radar);
+      if (radar) {
+          updateUserStats(score, radar);
+          setGameRadars(prev => [...prev, radar]); // 今回のゲーム用に蓄積
+      }
 
-      const newPlayers = [...players];
-      const pIndex = players.findIndex(p => p.id === (gameConfig.mode==='single' ? 0 : turnIdx));
-      if (pIndex >= 0) newPlayers[pIndex].score += score;
-      setPlayers(newPlayers);
-      
-      setResult({ answer: text, score, comment, radar });
-      setSelectedSubmission({ answerText: text, score, radar });
-      
-      if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setSurvivalGameOver(true);
-      if (gameConfig.singleMode === 'time_attack' && newPlayers[0].score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
-      
       if (score >= HALL_OF_FAME_THRESHOLD) {
           const entry = { topic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
       }
-
+      
+      // 注意: isSurvivalGameOver は次の描画で反映されるため、ここでは即時判定用フラグを使う
+      let isGameOver = false;
+      if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
+          setSurvivalGameOver(true);
+          isGameOver = true;
+      }
+      if (gameConfig.singleMode === 'time_attack') {
+           // 現在のスコアに加算される予定のスコアを考慮
+           if (players[0].score + score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
+      }
+      
+      // Update Score State
+      setPlayers(prev => {
+          const newPlayers = [...prev];
+          const pIndex = prev.findIndex(p => p.id === (gameConfig.mode==='single' ? 0 : turnIdx));
+          if (pIndex >= 0) newPlayers[pIndex].score += score;
+          return newPlayers;
+      });
+      
+      setResult({ answer: text, score, comment, radar });
+      setSelectedSubmission({ answerText: text, score, radar });
+      
       setIsJudging(false); playSound('result'); setPhase('result');
   };
 
@@ -641,7 +615,7 @@ export default function AiOgiriApp() {
       playSound('tap');
       if (gameConfig.mode === 'single') {
           if (gameConfig.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setPhase('final_result'); }
-          if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', round - 1); return setPhase('final_result'); }
+          if (gameConfig.singleMode === 'survival' && survivalOver) { updateRanking('survival', round - 1); return setPhase('final_result'); }
           if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setPhase('final_result'); }
       } else {
           if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setPhase('final_result');
@@ -714,6 +688,7 @@ export default function AiOgiriApp() {
                       <button onClick={() => setActiveModal('data')} className="text-xs flex flex-col items-center gap-1 text-slate-500"><Activity/>マイデータ</button>
                       <button onClick={() => setActiveModal('rule')} className="text-xs flex flex-col items-center gap-1 text-slate-500"><BookOpen/>ルール</button>
                       <button onClick={() => setActiveModal('hall')} className="text-xs flex flex-col items-center gap-1 text-yellow-600"><Crown/>殿堂入り</button>
+                      <button onClick={() => setActiveModal('update')} className="text-xs flex flex-col items-center gap-1 text-slate-500"><History/>更新情報</button>
                   </div>
               </div>
           )}
@@ -845,9 +820,9 @@ export default function AiOgiriApp() {
                             )}
                         </div>
                         <button onClick={nextGameRound} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">
-                            {/* 次へボタンの表示制御 */}
+                            {/* 次へボタンの表示制御（勝利判定など） */}
                             {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) ? '結果発表へ' :
-                             (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
+                             (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && survivalOver) ? '結果発表へ' :
                              (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
                              (gameConfig.mode === 'multi' && players.some(p => p.score >= WIN_SCORE_MULTI)) ? '結果発表へ' : '次のラウンドへ'}
                         </button>
