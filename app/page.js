@@ -178,7 +178,6 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
       <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl relative">
         <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
         <div className="text-center mb-6"><h3 className="text-xl font-black text-slate-700 flex items-center justify-center gap-2"><Settings className="w-6 h-6" /> 設定</h3></div>
-        
         <div className="space-y-6">
             <div>
                  <label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label>
@@ -307,6 +306,7 @@ const InfoModal = ({ onClose, type }) => (
              </div>
           </section>
           <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ（2人～）</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>1人が「親」、残りが「子」になります。</li><li>全員回答後、親が一番面白い回答を選びます。</li><li>審査時に<span className="font-bold text-red-500">「AIのダミー回答」</span>が1つ混ざります。</li><li>親がダミーを選ぶと<span className="font-bold">親が-1点</span>！ 見抜けるかが勝負です。</li></ul></section>
         </div>
       )}
       {type === 'update' && (
@@ -634,6 +634,7 @@ export default function AiOgiriApp() {
 
     if (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
 
+    // --- デッキ初期化：必ずリフレッシュ ---
     let initialDeck = [];
     let poolCards = [...FALLBACK_ANSWERS];
     if (learnedData.cardPool && learnedData.cardPool.length > 0) poolCards = [...poolCards, ...learnedData.cardPool];
@@ -882,7 +883,7 @@ export default function AiOgiriApp() {
         playSound('timeup');
         alert("⚠️ AI判定：不適切な表現が含まれています。");
         setIsJudging(false);
-        if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
+        setIsTimerRunning(true);
         return;
     }
     setSingleSelectedCard(text);
@@ -948,6 +949,7 @@ export default function AiOgiriApp() {
     setGamePhase('result');
   };
 
+  // --- UIコンポーネント (Main内で使用) ---
   if (appMode === 'title') {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in fade-in duration-500 text-slate-900 relative">
@@ -973,11 +975,7 @@ export default function AiOgiriApp() {
     );
   }
 
-  // ... (セットアップ、ゲーム、リザルト画面は前回と同じなので、省略せずにそのまま記述)
-  // 文字数制限のため、前回の回答のUIコンポーネントをそのままコピーして利用してください。
-  // 特に handleHandReroll の修正（即時交換・1回制限）と initGame の初期化（プール活用）が反映されています。
-  
-  // (Setup)
+  // (Setup, Game, Result Screens - same logic as before)
   if (appMode === 'setup') {
     return (
       <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-center animate-in slide-in-from-right duration-300 text-slate-900">
@@ -999,15 +997,10 @@ export default function AiOgiriApp() {
                         </button>
                     ))}
                 </div>
-                <div className="mt-6 text-center">
-                   <button onClick={resetLearnedData} className="text-xs text-slate-400 hover:text-red-500 flex items-center justify-center gap-1 mx-auto underline decoration-dotted"><Trash2 className="w-3 h-3" />AIの学習データをリセット</button>
-                </div>
+                <div className="mt-6 text-center"><button onClick={resetLearnedData} className="text-xs text-slate-400 hover:text-red-500 flex items-center justify-center gap-1 mx-auto underline decoration-dotted"><Trash2 className="w-3 h-3" />AIの学習データをリセット</button></div>
             </div>
           ) : (
-            <div>
-              <div className="bg-slate-50 p-4 rounded-xl text-sm text-slate-500 mb-6"><p className="mb-2 font-bold text-slate-700">マルチプレイのルール</p><ul className="list-disc list-inside space-y-1"><li>親と子に分かれて対戦します。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点されます。</li><li>10点先取で優勝！</li></ul></div>
-              <label className="block text-sm font-bold text-slate-700 mb-2">参加人数: {gameConfig.playerCount}人</label><input type="range" min="2" max="10" value={gameConfig.playerCount} onChange={(e) => setGameConfig(prev => ({ ...prev, playerCount: parseInt(e.target.value) }))} className="w-full accent-indigo-600" />
-            </div>
+            <div><div className="bg-slate-50 p-4 rounded-xl text-sm text-slate-500 mb-6"><p className="mb-2 font-bold text-slate-700">マルチプレイのルール</p><ul className="list-disc list-inside space-y-1"><li>親と子に分かれて対戦します。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点されます。</li><li>10点先取で優勝！</li></ul></div><label className="block text-sm font-bold text-slate-700 mb-2">参加人数: {gameConfig.playerCount}人</label><input type="range" min="2" max="10" value={gameConfig.playerCount} onChange={(e) => setGameConfig(prev => ({ ...prev, playerCount: parseInt(e.target.value) }))} className="w-full accent-indigo-600" /></div>
           )}
           <div className="pt-4 flex gap-3"><button onClick={() => { playSound('tap'); setAppMode('title'); }} className="flex-1 py-3 font-bold text-slate-500 hover:bg-slate-50 rounded-xl transition-colors">戻る</button><button onClick={initGame} className="flex-1 py-3 bg-indigo-600 text-white font-bold rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all active:scale-95">スタート</button></div>
         </div>
@@ -1015,7 +1008,6 @@ export default function AiOgiriApp() {
     );
   }
 
-  // (Final Result)
   if (gamePhase === 'final_result') {
       const isMulti = gameConfig.mode === 'multi';
       let title = "", main = "", sub = "", rankingList = null;
@@ -1050,7 +1042,6 @@ export default function AiOgiriApp() {
       );
   }
 
-  // (Main Game)
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-24 text-slate-900">
       <header className="bg-white border-b border-slate-200 py-3 px-4 flex justify-between items-center sticky top-0 z-20">
@@ -1070,7 +1061,6 @@ export default function AiOgiriApp() {
         {gamePhase === 'turn_change' && (<div className="flex flex-col items-center justify-center py-12 text-center animate-in fade-in duration-300"><div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full border border-slate-100"><div className="w-16 h-16 bg-amber-100 rounded-full flex items-center justify-center mx-auto mb-6 text-amber-600">{turnPlayerIndex === masterIndex ? <Eye className="w-8 h-8" /> : <PenTool className="w-8 h-8" />}</div><h2 className="text-2xl font-bold text-slate-800 mb-2">次は {players[turnPlayerIndex].name} さんの番です</h2><p className="text-slate-500 mb-8">{turnPlayerIndex === masterIndex ? '全員の回答が出揃いました！親に端末を渡してください。' : '他の人に見えないように端末を受け取ってください。'}</p><button onClick={() => turnPlayerIndex === masterIndex ? startJudging() : setGamePhase('answer_input')} className="w-full py-4 bg-slate-900 text-white font-bold rounded-xl hover:bg-slate-800 shadow-lg transform transition active:scale-95">{turnPlayerIndex === masterIndex ? '審査を始める（ダミーが混ざります！）' : '回答する'}</button></div></div>)}
         
         {gamePhase === 'answer_input' && (<div className="animate-in slide-in-from-bottom-4 duration-300"><TopicDisplay topic={currentTopic} answer={null} gamePhase={gamePhase} mode={gameConfig.mode} topicFeedback={topicFeedback} onFeedback={handleTopicFeedback} onReroll={handleTopicReroll} hasRerolled={hasTopicRerolled} isGenerating={isGeneratingTopic} singleMode={gameConfig.singleMode} /><div className="mb-2"><span className="text-xs font-bold text-indigo-600 bg-indigo-50 px-2 py-1 rounded">PLAYER</span><h3 className="text-lg font-bold text-slate-800 inline-block ml-2">{gameConfig.mode === 'single' ? 'あなたの回答' : `${players[turnPlayerIndex].name}の回答`}</h3></div>{isAiActive && gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle' && (<div className="mb-4"><div className="flex justify-between text-xs font-bold text-slate-500 mb-1"><span>残り時間</span><span className={`${timeLeft <= 5 ? 'text-red-600 animate-pulse' : ''}`}>{timeLeft}秒</span></div><div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden"><div className={`h-full rounded-full transition-all duration-1000 ease-linear ${timeLeft <= 5 ? 'bg-red-500' : 'bg-indigo-500'}`} style={{ width: `${(timeLeft / timeLimit) * 100}%` }}></div></div></div>)}<div className="mb-6"><div className="flex justify-between items-end mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><Layers className="w-3 h-3" />手札から選んで回答</p>{gameConfig.mode === 'single' && (<button onClick={handleHandReroll} disabled={isRerollingHand || isJudging} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-indigo-50 text-indigo-600 hover:bg-indigo-100 transition-all font-bold border border-indigo-200`}><RefreshCw className={`w-3 h-3 ${isRerollingHand ? 'animate-spin' : ''}`} />{hasHandRerolled ? '交換済み (残り0回)' : '手札全交換 (残り1回)'}</button>)}</div><div className="grid grid-cols-2 gap-3">{(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((card, idx) => (<Card key={idx} text={card} disabled={isJudging} onClick={() => { if (gameConfig.mode === 'single') handleSingleSubmit(card, false); else { if (window.confirm(`「${card}」で回答しますか？`)) handleMultiSubmit(card); }}} />))}</div></div><div className="flex items-center gap-4 text-slate-300 mb-6"><div className="h-px bg-slate-200 flex-1"></div><ArrowDown className="w-4 h-4 text-slate-300" /><div className="h-px bg-slate-200 flex-1"></div></div><div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200 mb-10"><div className="flex items-center justify-between mb-2"><p className="text-xs text-slate-400 font-bold flex items-center gap-1"><PenTool className="w-3 h-3" />自由に回答</p></div><div className="relative"><textarea value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} placeholder="ここに面白い回答を入力..." className="w-full p-3 bg-slate-50 rounded-xl border border-slate-200 focus:border-indigo-500 focus:outline-none min-h-[120px] mb-3 text-lg text-slate-900 placeholder:text-slate-400" /></div><button onClick={() => { if (!manualAnswerInput.trim()) return; if (gameConfig.mode === 'single') handleSingleSubmit(manualAnswerInput, true); else handleMultiSubmit(manualAnswerInput); }} disabled={!manualAnswerInput.trim() || isJudging} className="w-full py-3 bg-slate-800 text-white font-bold rounded-xl hover:bg-slate-900 disabled:opacity-50 transition-all active:scale-95">{isJudging ? 'AIが審査中...' : '送信する'}</button></div></div>)}
-        
         {gamePhase === 'judging' && (<div className="animate-in fade-in duration-300">{gameConfig.mode === 'single' ? (<div className="flex flex-col items-center justify-center py-20 text-center"><Sparkles className="w-16 h-16 text-amber-500 animate-pulse mb-6" /><h3 className="text-2xl font-bold text-slate-800">審査中...</h3><p className="text-slate-500">{isAiActive ? 'AIが面白さを分析しています' : 'AIはお休み中...ランダムに採点します！'}</p></div>) : (<div><div className="bg-amber-500 text-white p-4 rounded-t-2xl text-center"><span className="text-xs font-bold opacity-80 uppercase">JUDGE TIME</span><h2 className="text-xl font-bold">{players[masterIndex].name}さんが選んでください</h2></div><div className="bg-amber-50 p-4 border-x border-slate-200"><TopicDisplay topic={currentTopic} /></div><div className="p-4 grid gap-4 pb-20 bg-white rounded-b-2xl shadow-sm border-x border-b border-slate-200"><p className="text-center text-sm text-slate-500 mb-2">一番面白いと思う回答をタップしてください（誰のかは秘密です）</p>{shuffleArray([...submissions]).map((sub, idx) => (<button key={idx} onClick={() => handleJudge(sub)} className="w-full p-6 text-lg font-bold bg-white border-2 border-slate-200 rounded-xl hover:border-amber-500 hover:bg-amber-50 hover:shadow-md transition-all text-left relative overflow-hidden group text-slate-900"><span className="relative z-10">{sub.answerText}</span><div className="absolute right-4 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 transition-opacity"><ThumbsUp className="text-amber-500" /></div></button>))}</div></div>)}</div>)}
 
         {gamePhase === 'result' && (<div className="animate-in zoom-in duration-300 pb-20"><div className="text-center mb-6"><div className="inline-flex p-4 bg-yellow-100 rounded-full mb-4 shadow-inner"><Trophy className="w-12 h-12 text-yellow-600" /></div><h2 className="text-3xl font-extrabold text-slate-900">{gameConfig.mode === 'single' ? `${selectedSubmission?.score}点！` : '勝者決定！'}</h2></div><div className="bg-white rounded-3xl shadow-xl overflow-hidden mb-8 border border-slate-100"><div className="bg-slate-900 p-6 text-white text-center"><p className="text-indigo-300 text-sm font-bold mb-2 opacity-75">お題</p><p className="text-lg font-medium opacity-90">{currentTopic.replace('{placeholder}', '___')}</p></div><div className="p-8 text-center bg-gradient-to-b from-white to-slate-50"><p className="text-sm text-slate-400 font-bold mb-2">ベストアンサー</p><p className="text-3xl md:text-4xl font-black text-indigo-600 leading-tight mb-6">{selectedSubmission?.answerText}</p>{gameConfig.mode === 'single' ? (<>{selectedSubmission.radar && <div className="mb-6 flex justify-center"><RadarChart data={selectedSubmission.radar} size={150} /></div>}<div className="bg-slate-100 p-4 rounded-xl text-left inline-block max-w-sm"><div className="flex items-center gap-2 mb-1"><Sparkles className="w-4 h-4 text-amber-500" /><span className="text-xs font-bold text-slate-500">AIコメント</span></div><p className="text-slate-700">「{aiComment}」</p></div><div className="mt-3 pt-3 border-t border-slate-200"><p className="text-xs text-slate-400 font-bold mb-2 text-center">このツッコミは...</p>{aiFeedback === null ? (<div className="flex justify-center gap-4"><button onClick={() => handleAiFeedback(true)} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-green-50 hover:text-green-600 hover:border-green-200 transition-colors"><ThumbsUp className="w-3 h-3" /> ナイス！</button><button onClick={() => handleAiFeedback(false)} className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-bold text-slate-600 hover:bg-red-50 hover:text-red-600 hover:border-red-200 transition-colors"><ThumbsDown className="w-3 h-3" /> イマイチ</button></div>) : (<p className="text-xs text-center font-bold text-indigo-600 animate-in fade-in">{aiFeedback === 'good' ? 'ありがとうございます！😊' : '精進します...🙇'}</p>)}</div>{gameConfig.singleMode === 'survival' && isSurvivalGameOver && (<div className="mt-4 p-3 bg-red-100 text-red-700 font-bold rounded-lg animate-pulse">⚠️ {SURVIVAL_PASS_SCORE}点未満のため、ゲームオーバー！</div>)}{gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE && (<div className="mt-4 p-3 bg-blue-100 text-blue-700 font-bold rounded-lg animate-bounce">🎉 目標達成！ ゴール！</div>)}{selectedSubmission.score >= HALL_OF_FAME_THRESHOLD && (<div className="mt-4 p-3 bg-yellow-100 text-yellow-800 font-bold rounded-lg animate-bounce flex items-center justify-center gap-2"><Crown className="w-5 h-5"/> 殿堂入り！</div>)}</>) : (<div className="animate-bounce-in">{selectedSubmission.isDummy ? (<div className="bg-red-50 p-4 rounded-xl border border-red-200 inline-block"><div className="flex items-center gap-2 justify-center text-red-600 font-bold mb-2"><AlertTriangle className="w-6 h-6" /><span>残念！！</span></div><p className="text-slate-700">それは<span className="font-bold text-red-600">AIが作ったダミー回答</span>でした！</p><p className="text-sm text-slate-500 mt-1">見る目がない親は<span className="font-bold text-red-600 text-lg"> -1点 </span>です！</p></div>) : (<><p className="text-sm text-slate-400">by</p><p className="text-xl font-bold text-slate-800">{players.find(p => p.id === selectedSubmission?.playerId)?.name}</p><div className="mt-4 inline-block bg-yellow-400 text-yellow-900 text-xs font-bold px-3 py-1 rounded-full">次回の親になります</div></>)}</div>)}<div className="mt-8"><button onClick={handleShare} className="flex items-center gap-2 mx-auto px-6 py-3 bg-indigo-50 text-indigo-700 rounded-full font-bold hover:bg-indigo-100 transition-all active:scale-95">{isCopied ? <Check className="w-5 h-5" /> : <Share2 className="w-5 h-5" />}{isCopied ? 'コピーしました！' : '結果をシェアする'}</button></div></div></div>)}
