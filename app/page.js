@@ -15,8 +15,8 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 // --- 設定・定数 ---
 const APP_VERSION = "Ver 0.22";
 const UPDATE_LOGS = [
-  { version: "Ver 0.22", date: "2026/01/21", content: ["手札が表示されない不具合を修正", "ゲーム初期化処理の改善"] },
-  { version: "Ver 0.21", date: "2026/01/21", content: ["回答カード取得ロジックの修正（Firebase優先）", "APIエラー時の動作安定化"] },
+  { version: "Ver 0.22", date: "2026/01/21", content: ["回答選択時の画面遷移を即時化（フリーズ解消）", "エラー時の強制進行処理を追加"] },
+  { version: "Ver 0.20", date: "2026/01/21", content: ["効果音再生エラーの完全修正", "変数名の統一"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -92,18 +92,18 @@ const formatTime = (ms) => {
   const milliseconds = Math.floor((ms % 1000) / 10);
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
-const playSynthSound = (type, volume) => {
-  if (typeof window === 'undefined' || volume <= 0) return;
+
+// --- Web Audio API Helper ---
+const playOscillatorSound = (ctx, type, volume) => {
+  if (!ctx || volume <= 0) return;
   try {
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    const ctx = new AudioContext();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
     const now = ctx.currentTime;
     const vol = volume * 0.3;
+
     if (type === 'tap') {
       osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(vol, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1);
     } else if (type === 'decision') {
@@ -115,7 +115,7 @@ const playSynthSound = (type, volume) => {
     } else if (type === 'timeup') {
       osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
     }
-  } catch (e) {}
+  } catch (e) { console.error(e); }
 };
 
 // --- Sub Components ---
@@ -310,7 +310,7 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playSynthSound(type, volume);
+          playOscillatorSound(ctx, type, volume);
       }
   };
 
@@ -320,6 +320,7 @@ export default function AiOgiriApp() {
     }
   };
 
+  // --- Logic Helpers ---
   const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
   const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
   const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
@@ -455,7 +456,7 @@ export default function AiOgiriApp() {
   // --- Game Control ---
   const initGame = async () => {
       playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
-      setGameRadars([]); 
+      setGameRadars([]); // Reset radars
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       const fallback = FALLBACK_ANSWERS;
@@ -482,10 +483,6 @@ export default function AiOgiriApp() {
       };
 
       const { h: pHand, rest: d1 } = draw(initialDeck, 7);
-      
-      // 【修正】手札をstateにセット（前回抜けていた部分）
-      setSinglePlayerHand(pHand);
-
       if (gameConfig.mode === 'single') {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
           setMasterIndex(0);
@@ -507,7 +504,7 @@ export default function AiOgiriApp() {
 
   const startRound = (turn) => {
       setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
-      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHandRerolled(false); setTopicCreateRerollCount(0);
       setTurnPlayerIndex(turn); 
       
       if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
@@ -558,21 +555,30 @@ export default function AiOgiriApp() {
   };
 
   const submitAnswer = async (text) => {
-      playSound('decision'); setIsTimerRunning(false); setIsJudging(true);
-      
+      // 1. 即座に画面切り替え (フリーズ対策)
+      playSound('decision');
+      setIsTimerRunning(false);
+      setIsJudging(true);
+      setSingleSelectedCard(text);
+      setGamePhase('judging');
+
+      // 画面更新を待つ
+      await new Promise(r => setTimeout(r, 100));
+
+      // 2. スコア計算 (API or Fallback)
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
       let score = 50, comment = "...", radar = null;
-      
+
       try {
-        if (isAiActive) {
-            const res = await fetchAiJudgment(currentTopic, text, false);
-            if (res) { score = res.score; comment = res.comment; radar = res.radar; }
-        }
+          if (isAiActive) {
+              const res = await fetchAiJudgment(currentTopic, text, false);
+              if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+          }
       } catch(e) {
-        console.log("AI judgement failed, using fallback");
-        score = Math.floor(Math.random() * 40) + 40;
-        comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
+          // エラー時はフォールバック採点
+          score = Math.floor(Math.random() * 40) + 40;
+          comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
       
       setAiComment(comment);
@@ -587,10 +593,8 @@ export default function AiOgiriApp() {
           saveToHallOfFame(entry);
       }
       
-      let isGameOver = false;
       if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
           setIsSurvivalGameOver(true);
-          isGameOver = true;
       }
       if (gameConfig.singleMode === 'time_attack') {
            if (players[0].score + score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
@@ -606,7 +610,9 @@ export default function AiOgiriApp() {
       setResult({ answer: text, score, comment, radar });
       setSelectedSubmission({ answerText: text, score, radar });
       
-      setIsJudging(false); playSound('result'); setGamePhase('result');
+      setIsJudging(false); 
+      playSound('result'); 
+      setGamePhase('result');
   };
 
   const nextGameRound = () => {
@@ -627,7 +633,7 @@ export default function AiOgiriApp() {
 
   const rerollHand = () => {
       playSound('card'); 
-      if(hasHandRerolled) return; 
+      if(handRerolled) return; 
       
       setIsTimerRunning(false);
       const needed = 7; let newDeck = [...cardDeck];
@@ -708,28 +714,11 @@ export default function AiOgiriApp() {
     setSinglePlayerHand(newHand);
     setCardDeck(remainingDeck);
     
-    setHasHandRerolled(true);
+    setHandRerolled(true);
     setIsRerollingHand(false);
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     if (isAiActive) fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
-  };
-
-  const generateAiTopic = async () => {
-    playSound('tap');
-    if (isGeneratingTopic) return;
-    if (topicCreateRerollCount >= MAX_REROLL) {
-        alert("AI提案は1ターンにつき3回までです！");
-        return;
-    }
-    setIsGeneratingTopic(true);
-    let topic = await fetchAiTopic();
-    if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
-    const displayTopic = topic.replace(/\{placeholder\}/g, "___");
-    setManualTopicInput(displayTopic);
-    setLastAiGeneratedTopic(displayTopic);
-    setTopicCreateRerollCount(prev => prev + 1);
-    setIsGeneratingTopic(false);
   };
 
   const confirmTopicAI = async () => {
