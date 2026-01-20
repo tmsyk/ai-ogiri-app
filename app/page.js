@@ -6,7 +6,7 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
@@ -15,7 +15,7 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 // --- 設定・定数 ---
 const APP_VERSION = "Ver 0.27";
 const UPDATE_LOGS = [
-  { version: "Ver 0.27", date: "2026/01/21", content: ["回答カードの消費・補充ロジックを追加", "タイムアタックを回答回数制に変更"] },
+  { version: "Ver 0.27", date: "2026/01/21", content: ["回答カードの消費・補充ロジックを追加", "タイムアタックを回答回数制に変更", "レーダーチャートを合計値表示に変更"] },
   { version: "Ver 0.26", date: "2026/01/21", content: ["回答ボタンの反応しないバグを修正", "AIコメント取得失敗時の予備動作を強化"] },
 ];
 
@@ -27,6 +27,9 @@ const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
 const MAX_REROLL = 3;
+const HAND_SIZE = 6;
+const INITIAL_DECK_SIZE = 36;
+const RADAR_MAX_PER_ANSWER = 5;
 
 const FALLBACK_TOPICS = [
   "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。",
@@ -51,7 +54,7 @@ const FALLBACK_ANSWERS = [
   "誰もいない教室", "終わらない夏休み", "封印されし右腕", "実家のカルピス", "消えないデジタルタトゥー", "2年B組の田中",
   "週刊少年ジャンプ", "親指のささくれ", "隣の席の美少女", "地球外生命体", "謎の組織", "世界を救う鍵"
 ];
-const FALLBACK_COMMENTS = ["その発想はなかったわ！", "破壊力がすごいな！", "シュールすぎて腹筋崩壊ｗ", "それは反則やろ（笑）", "AIの計算を超えてるわ", "ある意味哲学的やな"];
+const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
 // --- Firebase設定 ---
 const firebaseConfig = {
@@ -94,7 +97,7 @@ const formatTime = (ms) => {
 };
 
 // --- Web Audio API Helper ---
-const playOscillatorSound = (ctx, type, volume) => {
+const playSynthSound = (ctx, type, volume) => {
   if (!ctx || volume <= 0) return;
   try {
     const osc = ctx.createOscillator();
@@ -134,18 +137,18 @@ const Card = ({ text, isSelected, onClick, disabled }) => (
   <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
 );
 
-const RadarChart = ({ data, size = 120 }) => {
-  const r = size / 2, c = size / 2, max = 5;
+const RadarChart = ({ data, size = 120, maxValue = RADAR_MAX_PER_ANSWER }) => {
+  const r = size / 2, c = size / 2, max = maxValue;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   const getP = (v, i) => ({ x: c + (v / max) * r * 0.8 * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + (v / max) * r * 0.8 * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) });
   const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {[5, 4, 3, 2, 1].map(l => <polygon key={l} points={keys.map((_, i) => getP(l, i).x + "," + getP(l, i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />)}
-        {keys.map((_, i) => { const p = getP(5, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        {[5, 4, 3, 2, 1].map(l => <polygon key={l} points={keys.map((_, i) => getP(l * (max/5), i).x + "," + getP(l * (max/5), i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />)}
+        {keys.map((_, i) => { const p = getP(max, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {keys.map((_, i) => { const p = getP(6.5, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        {keys.map((_, i) => { const p = getP(max * 1.2, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
       </svg>
     </div>
   );
@@ -164,7 +167,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={RADAR_MAX_PER_ANSWER * (stats.playCount || 1)} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -228,7 +231,7 @@ const InfoModal = ({ onClose, type }) => (
                <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Sparkles className="w-5 h-5 text-yellow-500" /></div><p>AIが採点<br/>＆ツッコミ</p></div>
              </div>
           </section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの「回答回数」を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
           <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点！</li></ul></section>
         </div>
       ) : (
@@ -246,6 +249,7 @@ const InfoModal = ({ onClose, type }) => (
 
 // --- メインアプリ ---
 export default function AiOgiriApp() {
+  // State
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
@@ -253,6 +257,7 @@ export default function AiOgiriApp() {
   const [volume, setVolume] = useState(0.5);
   const [timeLimit, setTimeLimit] = useState(30);
   
+  // Game State
   const [gamePhase, setGamePhase] = useState('drawing');
   const [currentRound, setCurrentRound] = useState(1);
   const [cardDeck, setCardDeck] = useState([]);
@@ -269,6 +274,7 @@ export default function AiOgiriApp() {
   const [result, setResult] = useState(null); 
   const [aiComment, setAiComment] = useState('');
   
+  // Flags & Counters
   const [isAiActive, setIsAiActive] = useState(true);
   const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
   const [isJudging, setIsJudging] = useState(false);
@@ -290,16 +296,19 @@ export default function AiOgiriApp() {
   const [isCopied, setIsCopied] = useState(false);
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
 
+  // Data
   const [currentUser, setCurrentUser] = useState(null);
-  const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, averageRadar: {} });
+  const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, totalRadar: {} });
   const [hallOfFame, setHallOfFame] = useState([]);
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
-  const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
+  const usedCardsRef = useRef(new Set());
 
+  // Modals
   const [activeModal, setActiveModal] = useState(null);
   const audioCtx = useRef(null);
+  const lastCardFetchRef = useRef(0);
 
   const playSound = (type) => {
       if (volume <= 0 || typeof window === 'undefined') return;
@@ -310,9 +319,47 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playOscillatorSound(ctx, type, volume);
+          playSynthSound(ctx, type, volume);
       }
   };
+
+  // --- Helpers ---
+  const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
+  const getUniqueCards = (cards, usedSet) => {
+    const unique = [];
+    const local = new Set();
+    for (const card of cards || []) {
+      const normalized = normalizeCardText(card);
+      if (!normalized || usedSet.has(normalized) || local.has(normalized)) continue;
+      local.add(normalized);
+      unique.push(normalized);
+    }
+    return unique;
+  };
+  const registerUsedCards = (cards) => {
+    cards.forEach(card => usedCardsRef.current.add(card));
+  };
+  const addCardsToDeck = (cards) => {
+    const uniqueCards = getUniqueCards(cards, usedCardsRef.current);
+    if (uniqueCards.length === 0) return;
+    registerUsedCards(uniqueCards);
+    setCardDeck(prev => [...prev, ...uniqueCards]);
+  };
+  const compactComment = (comment, maxLength = 16) => {
+    if (!comment) return "";
+    const trimmed = comment.toString().trim();
+    return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+  };
+  const formatAiComment = (comment) => {
+    if (!comment) return "";
+    const text = comment.toString().trim();
+    const firstSentence = text.split(/。|！|!|\?|？/)[0];
+    return compactComment(firstSentence);
+  };
+
+  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
+  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
+  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
 
   const handleBackToTitle = () => {
     if (window.confirm('タイトル画面に戻りますか？')) {
@@ -320,24 +367,22 @@ export default function AiOgiriApp() {
     }
   };
 
-  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
-  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
-  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
-
   const updateUserStats = (score, radar) => {
       setUserStats(prev => {
-          const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
-          const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
-          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          const newCount = (prev.playCount || 0) + 1;
+          const newMax = Math.max(prev.maxScore || 0, score);
+          const prevRadar = prev.totalRadar || prev.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
+          const r = radar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
           const newRadar = {
-              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
-              context: prevRadar.context * (1 - alpha) + r.context * alpha,
-              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
-              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
-              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
+              surprise: (prevRadar.surprise || 0) + (r.surprise || 0),
+              context: (prevRadar.context || 0) + (r.context || 0),
+              punchline: (prevRadar.punchline || 0) + (r.punchline || 0),
+              humor: (prevRadar.humor || 0) + (r.humor || 0),
+              intelligence: (prevRadar.intelligence || 0) + (r.intelligence || 0),
           };
-          const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
-          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); return newData;
+          const newData = { playCount: newCount, maxScore: newMax, totalRadar: newRadar };
+          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData));
+          return newData;
       });
   };
 
@@ -390,22 +435,38 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
-  const getAverageRadar = () => {
+  const getGameRadarTotal = () => {
       if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
-      const sum = gameRadars.reduce((acc, curr) => ({
-          surprise: acc.surprise + (curr.surprise||0), context: acc.context + (curr.context||0), punchline: acc.punchline + (curr.punchline||0), humor: acc.humor + (curr.humor||0), intelligence: acc.intelligence + (curr.intelligence||0),
-      }), { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 });
-      const count = gameRadars.length;
-      return { surprise: sum.surprise/count, context: sum.context/count, punchline: sum.punchline/count, humor: sum.humor/count, intelligence: sum.intelligence/count };
+      return gameRadars.reduce((acc, curr) => ({
+          surprise: acc.surprise + (curr.surprise || 0),
+          context: acc.context + (curr.context || 0),
+          punchline: acc.punchline + (curr.punchline || 0),
+          humor: acc.humor + (curr.humor || 0),
+          intelligence: acc.intelligence + (curr.intelligence || 0),
+       }), { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 });
   };
 
   // --- Effects ---
   useEffect(() => {
     const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); if (parsed.cardPool) parsed.cardPool.forEach(c => usedCardsRef.current.add(c)); }
+    const localLearned = localStorage.getItem('aiOgiriLearnedData'); if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
     const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
     const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
+    
+    const savedStats = localStorage.getItem('aiOgiriUserStats');
+    if (savedStats) {
+      const parsed = JSON.parse(savedStats);
+      if (!parsed.totalRadar && parsed.averageRadar && parsed.playCount) {
+        parsed.totalRadar = {
+          surprise: (parsed.averageRadar.surprise || 0) * parsed.playCount,
+          context: (parsed.averageRadar.context || 0) * parsed.playCount,
+          punchline: (parsed.averageRadar.punchline || 0) * parsed.playCount,
+          humor: (parsed.averageRadar.humor || 0) * parsed.playCount,
+          intelligence: (parsed.averageRadar.intelligence || 0) * parsed.playCount,
+        };
+      }
+      if (parsed.totalRadar || parsed.averageRadar) setUserStats(parsed);
+    }
     const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
     const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
     if (auth) { signInAnonymously(auth).catch(()=>{}); onAuthStateChanged(auth, u => setCurrentUser(u)); }
@@ -436,6 +497,15 @@ export default function AiOgiriApp() {
       return () => clearInterval(t);
   }, [appMode, startTime, finishTime]);
 
+  useEffect(() => {
+      if (!isAiActive || appMode !== 'game') return;
+      if (cardDeck.length >= HAND_SIZE * 2) return;
+      const now = Date.now();
+      if (now - lastCardFetchRef.current < 5000) return;
+      lastCardFetchRef.current = now;
+      fetchAiCards(HAND_SIZE).then(addCardsToDeck);
+  }, [appMode, cardDeck.length, isAiActive]);
+
   const callGemini = async (prompt) => {
       if (!isAiActive) return null;
       try {
@@ -448,9 +518,56 @@ export default function AiOgiriApp() {
       } catch (e) { return null; }
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
-  const fetchAiTopic = async () => { const ref = shuffleArray(learned.topics).slice(0,3).join("\n"); return (await callGemini(`大喜利のお題を1つ作成。条件:問いは一つ。回答は「名詞」。{placeholder}を文末付近に。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null; };
-  const fetchAiCards = async (count=10) => { const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:具体的,ジャンルバラバラ,既存回避。出力: {"answers": ["...", ...]}`); if(res?.answers) saveGeneratedCards(res.answers); return res?.answers || null; };
-  const fetchAiJudgment = async (topic, answer, isManual) => { const p = isManual ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.20文字ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`; return await callGemini(p); };
+  const fetchAiTopic = async () => {
+    const ref = shuffleArray(learned.topics).slice(0, 3).join("\n");
+    return (await callGemini(`大喜利のお題を1つ作成。条件:空欄{placeholder}に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null;
+  };
+  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
+    const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:短め(1-8文字中心),ジャンルバラバラ,定番〜変化球,擬音や語感の良い言葉も混ぜる,既存回避。出力: {"answers": ["...", ...]}`);
+    const uniqueAnswers = getUniqueCards(res?.answers, usedSet);
+    if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
+    return uniqueAnswers;
+  };
+  const fetchAiJudgment = async (topic, answer, isManual) => {
+    const p = isManual
+      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.8〜14文字の気の利いた一言ツッコミのみ(解説禁止) 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.8〜14文字の気の利いた一言ツッコミのみ(解説禁止) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
+    return await callGemini(p);
+  };
+
+  const collectCards = async (count) => {
+    const collected = [];
+    let remaining = count;
+    const usedSet = usedCardsRef.current;
+
+    if (isAiActive && remaining > 0) {
+      const aiCards = await fetchAiCards(Math.max(remaining, HAND_SIZE), usedSet);
+      if (aiCards.length > 0) {
+        registerUsedCards(aiCards);
+        collected.push(...aiCards);
+        remaining -= aiCards.length;
+      }
+    }
+
+    if (remaining > 0 && learned.cardPool?.length > 0) {
+      const poolCards = getUniqueCards(learned.cardPool, usedSet).slice(0, remaining);
+      if (poolCards.length > 0) {
+        registerUsedCards(poolCards);
+        collected.push(...poolCards);
+        remaining -= poolCards.length;
+      }
+    }
+
+    if (remaining > 0) {
+      const fallbackCards = getUniqueCards(FALLBACK_ANSWERS, usedSet).slice(0, remaining);
+      if (fallbackCards.length > 0) {
+        registerUsedCards(fallbackCards);
+        collected.push(...fallbackCards);
+      }
+    }
+
+    return collected;
+  };
 
   // --- Game Control ---
   const initGame = async () => {
@@ -458,30 +575,21 @@ export default function AiOgiriApp() {
       setGameRadars([]); 
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
-      const fallback = FALLBACK_ANSWERS;
-      let pool = [...fallback];
-      if (learned.cardPool) pool = [...pool, ...learned.cardPool];
-      const initialDeck = shuffleArray(pool).slice(0, 60);
-      
-      if (isAiActive) {
-          fetchAiCards(10).then(res => {
-              if (res) {
-                  setCardDeck(prev => [...prev, ...res]);
-              }
-          });
-      }
+      usedCardsRef.current = new Set();
+      const targetDeckSize = Math.max(INITIAL_DECK_SIZE, HAND_SIZE * (gameConfig.mode === 'single' ? 2 : gameConfig.playerCount + 1));
+      const initialDeck = shuffleArray(await collectCards(targetDeckSize));
       setCardDeck(initialDeck);
 
       const draw = (d, n) => {
-          const h = []; const rest = [...d];
-          for(let i=0; i<n; i++) {
-              if (rest.length===0) rest.push(...fallback);
-              h.push(rest.shift());
-          }
-          return { h, rest };
+           const h = []; const rest = [...d];
+           for(let i=0; i<n; i++) {
+              if (rest.length===0) break;
+               h.push(rest.shift());
+           }
+           return { h, rest };
       };
 
-      const { h: pHand, rest: d1 } = draw(initialDeck, 7);
+      const { h: pHand, rest: d1 } = draw(initialDeck, HAND_SIZE);
       setSinglePlayerHand(pHand);
 
       if (gameConfig.mode === 'single') {
@@ -491,7 +599,7 @@ export default function AiOgiriApp() {
           let currentD = d1;
           const newPlayers = [];
           for(let i=0; i<gameConfig.playerCount; i++){
-              const res = draw(currentD, 7);
+              const res = draw(currentD, HAND_SIZE);
               newPlayers.push({ id: i, name: multiNames[i] || `P${i+1}`, score: 0, hand: res.h });
               currentD = res.rest;
           }
@@ -556,14 +664,16 @@ export default function AiOgiriApp() {
 
   const submitAnswer = async (text, isManual = false) => {
       playSound('decision'); setIsTimerRunning(false); setIsJudging(true);
+      setSingleSelectedCard(text);
+      setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
       if (!isManual && gameConfig.mode === 'single') {
           const newHand = singlePlayerHand.filter(c => c !== text);
           let newDeck = [...cardDeck];
           if (newDeck.length === 0) {
-              // デッキ枯渇時はフォールバックを使用
-              newDeck = shuffleArray([...FALLBACK_ANSWERS]);
+              const refill = await collectCards(HAND_SIZE);
+              newDeck = shuffleArray(refill);
           }
           const drawCard = newDeck.shift();
           if (drawCard) newHand.push(drawCard);
@@ -583,12 +693,11 @@ export default function AiOgiriApp() {
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
-          // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
       
-      setAiComment(comment);
+      setAiComment(formatAiComment(comment));
       
       if (radar) {
           updateUserStats(score, radar);
@@ -638,17 +747,20 @@ export default function AiOgiriApp() {
       startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
   };
 
-  const rerollHand = () => {
+  const rerollHand = async () => {
       playSound('card'); 
       if(hasHandRerolled) return; 
       
       setIsTimerRunning(false);
-      const needed = 7; let newDeck = [...cardDeck];
-      if (newDeck.length < needed) newDeck = [...newDeck, ...shuffleArray(FALLBACK_ANSWERS)];
+      const needed = HAND_SIZE; let newDeck = [...cardDeck];
+      if (newDeck.length < needed) {
+          const refill = await collectCards(needed - newDeck.length);
+          newDeck = [...newDeck, ...refill];
+      }
       const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
       setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-      if (isAiActive) fetchAiCards(5).then(c => { if(c) setCardDeck(p => [...p, ...c]); });
+      if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
   };
   
   const handleMultiSubmit = (text) => {
@@ -699,20 +811,14 @@ export default function AiOgiriApp() {
 
     const currentHandSize = singlePlayerHand.length;
     let currentDeck = [...cardDeck];
-    let pool = [...FALLBACK_ANSWERS];
-    if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
     
     if (currentDeck.length < currentHandSize) {
-        if (isAiActive) {
-            const newCards = await fetchAiCards(8);
-            if (newCards) { addCardsToDeck(newCards); currentDeck = [...currentDeck, ...newCards]; }
-        }
-        if (currentDeck.length < currentHandSize) currentDeck = [...currentDeck, ...shuffleArray(pool)];
+        currentDeck = [...currentDeck, ...shuffleArray(FALLBACK_ANSWERS)];
     }
     const draw = (d, n) => {
           const h = []; const rest = [...d];
           for(let i=0; i<n; i++) {
-              if (rest.length===0) rest.push(...FALLBACK_ANSWERS);
+              if (rest.length===0) break;
               h.push(rest.shift());
           }
           return { h, rest };
@@ -725,7 +831,7 @@ export default function AiOgiriApp() {
     setIsRerollingHand(false);
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-    if (isAiActive) fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
+    if (isAiActive) fetchAiCards(10).then(addCardsToDeck);
   };
 
   const confirmTopicAI = async () => {
@@ -774,7 +880,7 @@ export default function AiOgiriApp() {
     setGamePhase('judging');
     let score = 0;
     if (result) {
-        setAiComment(result.comment);
+        setAiComment(formatAiComment(result.comment));
         score = result.score;
         if (result.radar) updateUserStats(score, result.radar);
         if (score >= HALL_OF_FAME_THRESHOLD) {
@@ -793,7 +899,7 @@ export default function AiOgiriApp() {
         }
     } else {
         score = Math.floor(Math.random() * 40) + 40;
-        setAiComment(FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)]);
+        setAiComment(formatAiComment(FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)]));
     }
     setPlayers(prev => {
         const newP = [...prev];
@@ -926,7 +1032,7 @@ export default function AiOgiriApp() {
 
                         <div className="flex justify-between items-center mb-2">
                             <span className="font-bold text-sm text-slate-500">手札から選択</span>
-                            {gameConfig.mode === 'single' && <button onClick={handleHandReroll} disabled={hasHandRerolled} className="text-xs bg-slate-100 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"><RefreshCw className="w-3 h-3"/> 手札交換 {hasHandRerolled ? '(済)' : ''}</button>}
+                            {gameConfig.mode === 'single' && <button onClick={rerollHand} disabled={hasHandRerolled} className="text-xs bg-slate-100 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"><RefreshCw className="w-3 h-3"/> 手札交換 {hasHandRerolled ? '(済)' : ''}</button>}
                         </div>
 
                         <div className="grid grid-cols-2 gap-3 mb-6">
@@ -1008,7 +1114,7 @@ export default function AiOgiriApp() {
                         {gameConfig.mode === 'single' && gameRadars.length > 0 && (
                             <div className="mb-6 flex justify-center flex-col items-center">
                                 <p className="text-sm font-bold text-slate-500 mb-2">今回のゲーム評価</p>
-                                <RadarChart data={getAverageRadar()} size={180} />
+                                <RadarChart data={getGameRadarTotal()} size={180} maxValue={RADAR_MAX_PER_ANSWER * Math.max(gameRadars.length, 1)} />
                             </div>
                         )}
                         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">タイトルへ</button>
