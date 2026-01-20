@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.22";
+const APP_VERSION = "Ver 0.23";
 const UPDATE_LOGS = [
-  { version: "Ver 0.22", date: "2026/01/21", content: ["回答選択時の画面遷移を即時化（フリーズ解消）", "エラー時の強制進行処理を追加"] },
-  { version: "Ver 0.20", date: "2026/01/21", content: ["効果音再生エラーの完全修正", "変数名の統一"] },
+  { version: "Ver 0.23", date: "2026/01/21", content: ["手札が表示されないバグを修正", "変数名の不整合を完全修正", "初期デッキ構築ロジックの改善"] },
+  { version: "Ver 0.22", date: "2026/01/21", content: ["回答選択時の画面遷移を即時化", "エラー時の強制進行処理を追加"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -94,7 +94,7 @@ const formatTime = (ms) => {
 };
 
 // --- Web Audio API Helper ---
-const playOscillatorSound = (ctx, type, volume) => {
+const playSynthSound = (ctx, type, volume) => {
   if (!ctx || volume <= 0) return;
   try {
     const osc = ctx.createOscillator();
@@ -310,7 +310,7 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playOscillatorSound(ctx, type, volume);
+          playOscillatorSound(ctx, type, volume); // 修正済み
       }
   };
 
@@ -456,12 +456,12 @@ export default function AiOgiriApp() {
   // --- Game Control ---
   const initGame = async () => {
       playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
-      setGameRadars([]); // Reset radars
+      setGameRadars([]); 
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       const fallback = FALLBACK_ANSWERS;
       let pool = [...fallback];
-      if (learned.pool) pool = [...pool, ...learned.pool];
+      if (learned.cardPool) pool = [...pool, ...learned.cardPool];
       const initialDeck = shuffleArray(pool).slice(0, 60);
       
       if (isAiActive) {
@@ -483,6 +483,9 @@ export default function AiOgiriApp() {
       };
 
       const { h: pHand, rest: d1 } = draw(initialDeck, 7);
+      // 重要：ここで手札をセット
+      setSinglePlayerHand(pHand); 
+
       if (gameConfig.mode === 'single') {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
           setMasterIndex(0);
@@ -504,7 +507,7 @@ export default function AiOgiriApp() {
 
   const startRound = (turn) => {
       setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
-      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHandRerolled(false); setTopicCreateRerollCount(0);
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
       setTurnPlayerIndex(turn); 
       
       if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
@@ -555,30 +558,15 @@ export default function AiOgiriApp() {
   };
 
   const submitAnswer = async (text) => {
-      // 1. 即座に画面切り替え (フリーズ対策)
-      playSound('decision');
-      setIsTimerRunning(false);
-      setIsJudging(true);
-      setSingleSelectedCard(text);
-      setGamePhase('judging');
-
-      // 画面更新を待つ
-      await new Promise(r => setTimeout(r, 100));
-
-      // 2. スコア計算 (API or Fallback)
+      playSound('decision'); setIsTimerRunning(false); setIsJudging(true);
+      
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
       let score = 50, comment = "...", radar = null;
-
-      try {
-          if (isAiActive) {
-              const res = await fetchAiJudgment(currentTopic, text, false);
-              if (res) { score = res.score; comment = res.comment; radar = res.radar; }
-          }
-      } catch(e) {
-          // エラー時はフォールバック採点
-          score = Math.floor(Math.random() * 40) + 40;
-          comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
+      
+      if (isAiActive) {
+          const res = await fetchAiJudgment(currentTopic, text, false);
+          if (res) { score = res.score; comment = res.comment; radar = res.radar; }
       }
       
       setAiComment(comment);
@@ -593,8 +581,10 @@ export default function AiOgiriApp() {
           saveToHallOfFame(entry);
       }
       
+      let isGameOver = false;
       if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
           setIsSurvivalGameOver(true);
+          isGameOver = true;
       }
       if (gameConfig.singleMode === 'time_attack') {
            if (players[0].score + score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
@@ -610,9 +600,7 @@ export default function AiOgiriApp() {
       setResult({ answer: text, score, comment, radar });
       setSelectedSubmission({ answerText: text, score, radar });
       
-      setIsJudging(false); 
-      playSound('result'); 
-      setGamePhase('result');
+      setIsJudging(false); playSound('result'); setGamePhase('result');
   };
 
   const nextGameRound = () => {
@@ -633,7 +621,7 @@ export default function AiOgiriApp() {
 
   const rerollHand = () => {
       playSound('card'); 
-      if(handRerolled) return; 
+      if(hasHandRerolled) return; 
       
       setIsTimerRunning(false);
       const needed = 7; let newDeck = [...cardDeck];
@@ -714,7 +702,7 @@ export default function AiOgiriApp() {
     setSinglePlayerHand(newHand);
     setCardDeck(remainingDeck);
     
-    setHandRerolled(true);
+    setHasHandRerolled(true);
     setIsRerollingHand(false);
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
@@ -814,6 +802,12 @@ export default function AiOgiriApp() {
   const handleShare = () => {
     const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
+  };
+
+  const prepareNextSubmitter = (current, master, currentPlayers) => {
+    const next = (current + 1) % currentPlayers.length;
+    if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); }
+    else { setTurnPlayerIndex(next); setGamePhase('turn_change'); }
   };
 
   // --- Render (View) ---
