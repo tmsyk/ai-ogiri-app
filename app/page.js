@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.32";
+const APP_VERSION = "Ver 0.33";
 const UPDATE_LOGS = [
+  { version: "Ver 0.33", date: "2026/01/24", content: ["手札カードを実在する言葉中心に改善", "AIツッコミの質を向上", "ラウンド遷移時の連打防止とローディング表示を強化"] },
   { version: "Ver 0.32", date: "2026/01/23", content: ["起動時のエラー(syncActiveCards)を修正", "ローディング画面にテキストを追加"] },
-  { version: "Ver 0.31", date: "2026/01/23", content: ["AIコメント表示の重複を修正", "山札システムの導入", "お題の質を改善"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -340,11 +340,8 @@ export default function AiOgiriApp() {
     activeCardsRef.current = next;
   };
   
-  // 修正: syncActiveCards が正しく呼び出されるようにする
   const syncCardsWrapper = (hands, deck) => {
-      if (typeof syncActiveCards === 'function') {
-          syncActiveCards(hands, deck);
-      }
+      syncActiveCards(hands, deck);
   };
 
   const addCardsToDeck = (cards) => {
@@ -353,29 +350,32 @@ export default function AiOgiriApp() {
     registerActiveCards(uniqueCards);
     setCardDeck(prev => [...prev, ...uniqueCards]);
   };
-  const compactComment = (comment, maxLength = 16) => {
+  const compactComment = (comment, maxLength = 30) => {
     if (!comment) return "";
     const trimmed = comment.toString().trim();
-    return trimmed.length > maxLength ? trimmed.slice(0, maxLength) : trimmed;
+    // 最初の句点、感嘆符、疑問符までを取得、なければ全体
+    const split = trimmed.split(/[。！？!?]/);
+    return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
   };
   const isTopicClear = (topic) => {
     if (!topic || !topic.includes('{placeholder}')) return false;
+    // 「」で囲まれているかチェック
     const hasQuotedPlaceholder = /「\s*\{placeholder\}\s*」/.test(topic);
     if (!hasQuotedPlaceholder) return false;
-    if (/{(?!placeholder})[^}]+}/.test(topic)) return false;
+    // 穴埋めが1つだけか
     if ((topic.match(/\{placeholder\}/g) || []).length !== 1) return false;
-    return !/(どんな|どういう|なぜ|理由|教えて|について|真実|説明|内容|わけ)/.test(topic);
+    return true;
   };
   const ensureQuotedPlaceholder = (topic) => {
     if (!topic) return topic;
+    // すでに「」で囲まれていればそのまま
     if (/「\s*\{placeholder\}\s*」/.test(topic)) return topic;
+    // 囲まれていなければ囲む
     return topic.replace('{placeholder}', '「{placeholder}」');
   };
   const formatAiComment = (comment) => {
     if (!comment) return "";
-    const text = comment.toString().trim();
-    const firstSentence = text.split(/。|！|!|\?|？/)[0];
-    return compactComment(firstSentence);
+    return compactComment(comment);
   };
 
   const handleBackToTitle = () => {
@@ -550,15 +550,37 @@ export default function AiOgiriApp() {
       } catch (e) { return null; }
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
-  const fetchAiTopic = async () => { const ref = shuffleArray(learned.topics).slice(0,3).join("\n"); return (await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null; };
-  const fetchAiCards = async (count=10) => { const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:具体的,ジャンルバラバラ,既存回避。出力: {"answers": ["...", ...]}`); if(res?.answers) saveGeneratedCards(res.answers); return res?.answers || null; };
-  const fetchAiJudgment = async (topic, answer, isManual) => { const p = isManual ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.20文字ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`; return await callGemini(p); };
+  const fetchAiTopic = async () => {
+    const ref = shuffleArray(learned.topics).slice(0, 3).join("\n");
+    return (await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null;
+  };
+  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
+    const prompt = `
+    大喜利の回答カード（単語・短いフレーズ）を${count}個作成。
+    条件:
+    1. 世の中に実在する言葉、名詞、慣用句を選ぶこと。
+    2. 架空の長すぎる造語（例：〇〇の〇〇な〇〇）は禁止。
+    3. シンプルだが、お題と組み合わせると面白くなる言葉。
+    4. ジャンルはバラバラに（食べ物、人物、場所、道具、抽象概念など）。
+    出力: {"answers": ["...", ...]}`;
+    const res = await callGemini(prompt);
+    const uniqueAnswers = getUniqueCards(res?.answers, usedSet);
+    if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
+    return uniqueAnswers;
+  };
+  const fetchAiJudgment = async (topic, answer, isManual) => {
+    const p = isManual
+      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.関西弁や鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.関西弁や鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
+    return await callGemini(p);
+  };
 
   const collectCards = async (count) => {
     const collected = [];
     let remaining = count;
     const usedSet = activeCardsRef.current;
 
+    // AIから補充
     if (isAiActive && remaining > 0) {
       const aiCards = await fetchAiCards(Math.max(remaining, HAND_SIZE), usedSet);
       if (aiCards.length > 0) {
@@ -567,7 +589,7 @@ export default function AiOgiriApp() {
         remaining -= aiCards.length;
       }
     }
-
+    // プールから補充
     if (remaining > 0 && learned.cardPool?.length > 0) {
       const poolCards = getUniqueCards(learned.cardPool, usedSet).slice(0, remaining);
       if (poolCards.length > 0) {
@@ -576,7 +598,7 @@ export default function AiOgiriApp() {
         remaining -= poolCards.length;
       }
     }
-
+    // フォールバックから補充
     if (remaining > 0) {
       const fallbackCards = getUniqueCards(FALLBACK_ANSWERS, usedSet).slice(0, remaining);
       if (fallbackCards.length > 0) {
@@ -584,8 +606,7 @@ export default function AiOgiriApp() {
         collected.push(...fallbackCards);
       }
     }
-    
-    // 枯渇時の最終手段
+    // 最終手段（既出リセット）
     if (remaining > 0) {
       const resetCards = getUniqueCards(FALLBACK_ANSWERS, new Set());
       collected.push(...resetCards.slice(0, remaining));
@@ -597,16 +618,22 @@ export default function AiOgiriApp() {
   const refillHand = async (hand, deck, desiredSize = HAND_SIZE) => {
     let nextHand = [...hand];
     let nextDeck = [...deck];
+    
     while (nextHand.length < desiredSize) {
       if (nextDeck.length === 0) {
-        const refill = await collectCards(desiredSize - nextHand.length + 5);
-        if (refill.length === 0) break;
+        // 山札が尽きたら補充
+        const refill = await collectCards(Math.max(desiredSize - nextHand.length, 5));
+        if (refill.length === 0) break; 
         nextDeck = [...nextDeck, ...refill];
       }
+      
       const drawCard = nextDeck.shift();
       if (!drawCard) break;
-      if (nextHand.includes(drawCard)) continue;
-      nextHand.push(drawCard);
+      
+      // 手札に重複がなければ追加
+      if (!nextHand.includes(drawCard)) {
+          nextHand.push(drawCard);
+      }
     }
     return { hand: nextHand, deck: nextDeck };
   };
@@ -618,40 +645,47 @@ export default function AiOgiriApp() {
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       activeCardsRef.current = new Set();
-      const targetDeckSize = Math.max(INITIAL_DECK_SIZE, HAND_SIZE * (gameConfig.mode === 'single' ? 2 : gameConfig.playerCount + 1));
-      const initialDeck = shuffleArray(await collectCards(targetDeckSize));
+      // 初期デッキ作成（重複なし・十分な量）
+      const targetDeckSize = Math.max(INITIAL_DECK_SIZE, HAND_SIZE * (gameConfig.mode === 'single' ? 2 : gameConfig.playerCount + 1) * 3);
+      const collected = await collectCards(targetDeckSize);
+      const initialDeck = shuffleArray(collected);
+      
       setCardDeck(initialDeck);
 
+      // デッキからカードを引く関数
       const draw = (d, n) => {
-           const h = []; const rest = [...d];
+           const h = []; 
+           const rest = [...d];
            for(let i=0; i<n; i++) {
-              if (rest.length===0) break;
+              if (rest.length === 0) break;
                h.push(rest.shift());
            }
            return { h, rest };
       };
 
-      const { h: pHand, rest: d1 } = draw(initialDeck, HAND_SIZE);
-      setSinglePlayerHand(pHand);
-
+      // プレイヤーに配布
+      let currentD = initialDeck;
+      
       if (gameConfig.mode === 'single') {
+          const { h: pHand, rest } = draw(currentD, HAND_SIZE);
+          currentD = rest;
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
+          setSinglePlayerHand(pHand);
           setMasterIndex(0);
-          syncActiveCards([pHand], initialDeck);
+          syncCardsWrapper([pHand], currentD);
       } else {
-          let currentD = d1;
           const newPlayers = [];
           for(let i=0; i<gameConfig.playerCount; i++){
-              const res = draw(currentD, HAND_SIZE);
-              newPlayers.push({ id: i, name: multiNames[i] || `P${i+1}`, score: 0, hand: res.h });
-              currentD = res.rest;
+              const { h, rest } = draw(currentD, HAND_SIZE);
+              currentD = rest;
+              newPlayers.push({ id: i, name: multiNames[i] || `P${i+1}`, score: 0, hand: h });
           }
           setPlayers(newPlayers);
-          setCardDeck(currentD);
           setMasterIndex(Math.floor(Math.random() * gameConfig.playerCount));
-          syncActiveCards(newPlayers.map(p => p.hand), currentD);
+          syncCardsWrapper(newPlayers.map(p => p.hand), currentD);
       }
       
+      setCardDeck(currentD);
       setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
 
@@ -716,22 +750,33 @@ export default function AiOgiriApp() {
       setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
+      // ここで山札からカードを引いて補充する
       if (!isManual && gameConfig.mode === 'single') {
-          const newHand = singlePlayerHand.filter(c => c !== text);
-          let newDeck = [...cardDeck];
-          if (newDeck.length === 0) {
-              const refill = await collectCards(HAND_SIZE);
-              newDeck = shuffleArray(refill);
-          }
-          const drawCard = newDeck.shift();
-          if (drawCard) newHand.push(drawCard);
+          // 使ったカードを手札から消す
+          const currentHand = singlePlayerHand.filter(c => c !== text);
           
-          setSinglePlayerHand(newHand);
-          setCardDeck(newDeck);
-          const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
-          setSinglePlayerHand(filledHand);
-          setCardDeck(filledDeck);
-          syncActiveCards([filledHand], filledDeck);
+          let nextDeck = [...cardDeck];
+          
+          // 山札が足りなければ補充（非同期）
+          if (nextDeck.length < 5) {
+             collectCards(10).then(newCards => {
+                 setCardDeck(prev => [...prev, ...newCards]);
+             });
+          }
+
+          // 山札から1枚引く (あれば)
+          if (nextDeck.length > 0) {
+              const drawCard = nextDeck.shift();
+              currentHand.push(drawCard);
+          } else {
+              // 山札がない場合の緊急フォールバック
+               const fallback = shuffleArray(FALLBACK_ANSWERS)[0];
+               currentHand.push(fallback);
+          }
+
+          setSinglePlayerHand(currentHand);
+          setCardDeck(nextDeck);
+          syncCardsWrapper([currentHand], nextDeck);
       }
 
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
@@ -745,7 +790,6 @@ export default function AiOgiriApp() {
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
-          // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
@@ -788,18 +832,24 @@ export default function AiOgiriApp() {
       playSound('tap');
       if (isAdvancingRound) return;
       setIsAdvancingRound(true);
-      if (gameConfig.mode === 'single') {
-          if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
-          if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', currentRound - 1); return setGamePhase('final_result'); }
-          if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setGamePhase('final_result'); }
-      } else {
-          if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
-      }
       
-      setCurrentRound(r => r + 1);
-      const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
-      setMasterIndex(nextMaster);
-      startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
+      // 即座に準備中へ
+      setGamePhase('drawing');
+
+      setTimeout(() => {
+        if (gameConfig.mode === 'single') {
+            if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
+            if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', currentRound - 1); return setGamePhase('final_result'); }
+            if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setGamePhase('final_result'); }
+        } else {
+            if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
+        }
+        
+        setCurrentRound(r => r + 1);
+        const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
+        setMasterIndex(nextMaster);
+        startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
+      }, 500);
   };
 
   const rerollHand = async () => {
@@ -816,7 +866,7 @@ export default function AiOgiriApp() {
       setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
       const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
       setSinglePlayerHand(filledHand); setCardDeck(filledDeck); setHasHandRerolled(true);
-      syncActiveCards([filledHand], filledDeck);
+      syncCardsWrapper([filledHand], filledDeck);
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
   };
@@ -1152,7 +1202,7 @@ export default function AiOgiriApp() {
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
                                 <div className="bg-slate-100 p-4 rounded-xl text-left inline-block">
                                   <p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p>
-                                  <p className="text-sm text-slate-800">「{aiComment}」</p>
+                                  <p className="text-sm text-slate-800">{aiComment}</p>
                                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                                     <span>評価:</span>
                                     {aiFeedback === null ? (
