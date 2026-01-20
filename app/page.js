@@ -1152,7 +1152,6 @@ export default function AiOgiriApp() {
                             {gameConfig.mode === 'single' ? (
                                 <>
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
-                                <div className="bg-slate-100 p-4 rounded-xl text-left inline-block"><p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p><p className="text-sm text-slate-800">「{aiComment}」</p></div>
                                 <div className="bg-slate-100 p-4 rounded-xl text-left inline-block">
                                   <p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p>
                                   <p className="text-sm text-slate-800">「{aiComment}」</p>
