@@ -6,18 +6,17 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.30";
+const APP_VERSION = "Ver 0.31";
 const UPDATE_LOGS = [
+  { version: "Ver 0.31", date: "2026/01/23", content: ["AIコメント表示の重複を修正", "山札システムの導入（カード重複防止）", "お題の質を改善", "通信中の表示を親切化"] },
   { version: "Ver 0.30", date: "2026/01/22", content: ["手札交換ロジックの改善", "結果画面の誤操作防止", "AI評価フィードバック機能"] },
-  { version: "Ver 0.29", date: "2026/01/22", content: ["コード重複によるビルドエラーを修正", "お題生成ロジックの改善"] },
-  { version: "Ver 0.28", date: "2026/01/22", content: ["回答カード消費・補充ロジック実装", "タイムアタックを回数制に変更"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -28,7 +27,7 @@ const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
 const HAND_SIZE = 6;
-const INITIAL_DECK_SIZE = 36;
+const INITIAL_DECK_SIZE = 50; // 初期山札枚数を増量
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
 
@@ -333,12 +332,6 @@ export default function AiOgiriApp() {
   };
   const registerActiveCards = (cards) => {
     cards.forEach(card => activeCardsRef.current.add(card));
-  };
-  const syncActiveCards = (hands, deck) => {
-    const next = new Set();
-    hands.flat().forEach(card => next.add(card));
-    deck.forEach(card => next.add(card));
-    activeCardsRef.current = next;
   };
   const addCardsToDeck = (cards) => {
     const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
@@ -1150,7 +1143,6 @@ export default function AiOgiriApp() {
                             {gameConfig.mode === 'single' ? (
                                 <>
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
-                                <div className="bg-slate-100 p-4 rounded-xl text-left inline-block"><p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p><p className="text-sm text-slate-800">「{aiComment}」</p></div>
                                 <div className="bg-slate-100 p-4 rounded-xl text-left inline-block">
                                   <p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p>
                                   <p className="text-sm text-slate-800">「{aiComment}」</p>
