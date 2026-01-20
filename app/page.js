@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.18";
+const APP_VERSION = "Ver 0.19";
 const UPDATE_LOGS = [
+  { version: "Ver 0.19", date: "2026/01/21", content: ["進行不能バグ（変数名ミス）の完全修正", "APIエラー時の強制続行処理を追加"] },
   { version: "Ver 0.18", date: "2026/01/21", content: ["変数名不一致による進行不能バグを修正", "APIエラー時のフォールバック処理を強化"] },
-  { version: "Ver 0.17", date: "2026/01/21", content: ["効果音機能の関数名エラーを修正", "ゲーム開始時の動作安定化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -92,8 +92,6 @@ const formatTime = (ms) => {
   const milliseconds = Math.floor((ms % 1000) / 10);
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
-
-// --- Web Audio API Helper ---
 const playSynthSound = (type, volume) => {
   if (typeof window === 'undefined' || volume <= 0) return;
   try {
@@ -312,7 +310,7 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playSynthSound(type, volume);
+          createSynth(ctx, type, volume);
       }
   };
 
@@ -326,7 +324,23 @@ export default function AiOgiriApp() {
   const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
   const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
 
-  // --- Logic Helpers ---
+  const updateUserStats = (score, radar) => {
+      setUserStats(prev => {
+          const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
+          const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          const newRadar = {
+              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
+              context: prevRadar.context * (1 - alpha) + r.context * alpha,
+              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
+              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
+              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
+          };
+          const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
+          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); return newData;
+      });
+  };
+
   const saveGeneratedCards = async (newCards) => {
     if (!newCards || newCards.length === 0) return;
     const updatedPool = [...(learned.cardPool || []), ...newCards].slice(-100); 
@@ -376,24 +390,6 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
-
-  const updateUserStats = (score, radar) => {
-      setUserStats(prev => {
-          const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
-          const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
-          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
-          const newRadar = {
-              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
-              context: prevRadar.context * (1 - alpha) + r.context * alpha,
-              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
-              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
-              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
-          };
-          const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
-          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); return newData;
-      });
-  };
-
   const getAverageRadar = () => {
       if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
       const sum = gameRadars.reduce((acc, curr) => ({
@@ -507,7 +503,7 @@ export default function AiOgiriApp() {
 
   const startRound = (turn) => {
       setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
-      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHandRerolled(false); setTopicCreateRerollCount(0);
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
       setTurnPlayerIndex(turn); 
       
       if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
@@ -612,7 +608,11 @@ export default function AiOgiriApp() {
   };
 
   const rerollHand = () => {
-      playSound('card'); if(hasHandRerolled) return; setIsTimerRunning(false);
+      playSound('card'); 
+      // 手札交換の制限回数チェックを外す（無制限化）なら以下のようにする
+      // if(hasHandRerolled) return; 
+      
+      setIsTimerRunning(false);
       const needed = 7; let newDeck = [...cardDeck];
       if (newDeck.length < needed) newDeck = [...newDeck, ...shuffleArray(FALLBACK_ANSWERS)];
       const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
@@ -967,7 +967,7 @@ export default function AiOgiriApp() {
                         </div>
                         <button onClick={nextGameRound} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">
                             {/* 次へボタンの表示制御（勝利判定など） */}
-                            {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) ? '結果発表へ' :
+                            {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) ? '結果発表へ' :
                              (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
                              (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
                              (gameConfig.mode === 'multi' && players.some(p => p.score >= WIN_SCORE_MULTI)) ? '結果発表へ' : '次のラウンドへ'}
