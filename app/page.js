@@ -684,8 +684,6 @@ export default function AiOgiriApp() {
       
       let t = "";
       try {
-          const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
-          t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
           const res = await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は1箇所のみ。JSON出力{"topic":"..."}`);
           const normalized = ensureQuotedPlaceholder(res?.topic);
           t = (isTopicClear(normalized) ? normalized : null) || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
