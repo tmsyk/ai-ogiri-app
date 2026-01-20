@@ -13,9 +13,9 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.23";
+const APP_VERSION = "Ver 0.25";
 const UPDATE_LOGS = [
-  { version: "Ver 0.23", date: "2026/01/21", content: ["手札が表示されないバグを修正", "変数名の不整合を完全修正", "初期デッキ構築ロジックの改善"] },
+  { version: "Ver 0.25", date: "2026/01/21", content: ["効果音関数名の不一致を修正", "手札交換の変数名エラーを修正"] },
   { version: "Ver 0.22", date: "2026/01/21", content: ["回答選択時の画面遷移を即時化", "エラー時の強制進行処理を追加"] },
 ];
 
@@ -94,7 +94,8 @@ const formatTime = (ms) => {
 };
 
 // --- Web Audio API Helper ---
-const playSynthSound = (ctx, type, volume) => {
+// 関数名を統一 (playOscillatorSound)
+const playOscillatorSound = (ctx, type, volume) => {
   if (!ctx || volume <= 0) return;
   try {
     const osc = ctx.createOscillator();
@@ -314,16 +315,16 @@ export default function AiOgiriApp() {
       }
   };
 
+  // --- Logic Helpers ---
+  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
+  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
+  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
+
   const handleBackToTitle = () => {
     if (window.confirm('タイトル画面に戻りますか？')) {
       playSound('tap'); setIsTimerRunning(false); setAppMode('title');
     }
   };
-
-  // --- Logic Helpers ---
-  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
-  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
-  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
 
   const updateUserStats = (score, radar) => {
       setUserStats(prev => {
@@ -391,6 +392,7 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
+
   const getAverageRadar = () => {
       if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
       const sum = gameRadars.reduce((acc, curr) => ({
@@ -483,8 +485,7 @@ export default function AiOgiriApp() {
       };
 
       const { h: pHand, rest: d1 } = draw(initialDeck, 7);
-      // 重要：ここで手札をセット
-      setSinglePlayerHand(pHand); 
+      setSinglePlayerHand(pHand); // 手札セット
 
       if (gameConfig.mode === 'single') {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
@@ -521,7 +522,6 @@ export default function AiOgiriApp() {
       if (isGeneratingTopic) return;
       setIsGeneratingTopic(true);
       
-      // APIエラー時でも必ずフォールバックが機能するようにtry-catch
       let t = "";
       try {
           const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
@@ -564,9 +564,14 @@ export default function AiOgiriApp() {
 
       let score = 50, comment = "...", radar = null;
       
-      if (isAiActive) {
-          const res = await fetchAiJudgment(currentTopic, text, false);
-          if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+      try {
+        if (isAiActive) {
+            const res = await fetchAiJudgment(currentTopic, text, false);
+            if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+        }
+      } catch(e) {
+          score = Math.floor(Math.random() * 40) + 40;
+          comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
       
       setAiComment(comment);
@@ -684,11 +689,7 @@ export default function AiOgiriApp() {
     if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
     
     if (currentDeck.length < currentHandSize) {
-        if (isAiActive) {
-            const newCards = await fetchAiCards(8);
-            if (newCards) { addCardsToDeck(newCards); currentDeck = [...currentDeck, ...newCards]; }
-        }
-        if (currentDeck.length < currentHandSize) currentDeck = [...currentDeck, ...shuffleArray(pool)];
+        currentDeck = [...currentDeck, ...shuffleArray(pool)];
     }
     const draw = (d, n) => {
           const h = []; const rest = [...d];
