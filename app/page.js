@@ -17,6 +17,7 @@ const APP_VERSION = "Ver 0.27";
 const UPDATE_LOGS = [
   { version: "Ver 0.27", date: "2026/01/21", content: ["回答カードの消費・補充ロジックを追加", "タイムアタックを回答回数制に変更", "レーダーチャートを合計値表示に変更"] },
   { version: "Ver 0.26", date: "2026/01/21", content: ["回答ボタンの反応しないバグを修正", "AIコメント取得失敗時の予備動作を強化"] },
+  { version: "Ver 0.20", date: "2026/01/21", content: ["効果音再生エラーの完全修正", "変数名の統一"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -231,7 +232,7 @@ const InfoModal = ({ onClose, type }) => (
                <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Sparkles className="w-5 h-5 text-yellow-500" /></div><p>AIが採点<br/>＆ツッコミ</p></div>
              </div>
           </section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの「回答回数」を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
           <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点！</li></ul></section>
         </div>
       ) : (
@@ -249,7 +250,6 @@ const InfoModal = ({ onClose, type }) => (
 
 // --- メインアプリ ---
 export default function AiOgiriApp() {
-  // State
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
@@ -257,7 +257,6 @@ export default function AiOgiriApp() {
   const [volume, setVolume] = useState(0.5);
   const [timeLimit, setTimeLimit] = useState(30);
   
-  // Game State
   const [gamePhase, setGamePhase] = useState('drawing');
   const [currentRound, setCurrentRound] = useState(1);
   const [cardDeck, setCardDeck] = useState([]);
@@ -274,7 +273,6 @@ export default function AiOgiriApp() {
   const [result, setResult] = useState(null); 
   const [aiComment, setAiComment] = useState('');
   
-  // Flags & Counters
   const [isAiActive, setIsAiActive] = useState(true);
   const [isGeneratingTopic, setIsGeneratingTopic] = useState(false);
   const [isJudging, setIsJudging] = useState(false);
@@ -296,7 +294,6 @@ export default function AiOgiriApp() {
   const [isCopied, setIsCopied] = useState(false);
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
 
-  // Data
   const [currentUser, setCurrentUser] = useState(null);
   const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, totalRadar: {} });
   const [hallOfFame, setHallOfFame] = useState([]);
@@ -305,7 +302,6 @@ export default function AiOgiriApp() {
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   const usedCardsRef = useRef(new Set());
 
-  // Modals
   const [activeModal, setActiveModal] = useState(null);
   const audioCtx = useRef(null);
   const lastCardFetchRef = useRef(0);
@@ -569,6 +565,22 @@ export default function AiOgiriApp() {
     return collected;
   };
 
+  const refillHand = async (hand, deck, desiredSize = HAND_SIZE) => {
+    let nextHand = [...hand];
+    let nextDeck = [...deck];
+    while (nextHand.length < desiredSize) {
+      if (nextDeck.length === 0) {
+        const refill = await collectCards(desiredSize - nextHand.length);
+        if (refill.length === 0) break;
+        nextDeck = [...nextDeck, ...refill];
+      }
+      const drawCard = nextDeck.shift();
+      if (!drawCard) break;
+      if (!nextHand.includes(drawCard)) nextHand.push(drawCard);
+    }
+    return { hand: nextHand, deck: nextDeck };
+  };
+
   // --- Game Control ---
   const initGame = async () => {
       playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
@@ -680,6 +692,9 @@ export default function AiOgiriApp() {
           
           setSinglePlayerHand(newHand);
           setCardDeck(newDeck);
+          const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
+          setSinglePlayerHand(filledHand);
+          setCardDeck(filledDeck);
       }
 
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
@@ -693,6 +708,7 @@ export default function AiOgiriApp() {
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
+          // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
@@ -759,6 +775,9 @@ export default function AiOgiriApp() {
       }
       const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
       setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
+      const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
+      setSinglePlayerHand(filledHand); setCardDeck(filledDeck); setHasHandRerolled(true);
+
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
   };
