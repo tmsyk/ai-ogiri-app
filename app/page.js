@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.20";
+const APP_VERSION = "Ver 0.21";
 const UPDATE_LOGS = [
-  { version: "Ver 0.20", date: "2026/01/21", content: ["効果音再生エラーの完全修正", "変数名の統一による動作安定化", "ゲーム進行不能バグの修正"] },
-  { version: "Ver 0.19", date: "2026/01/21", content: ["進行不能バグの修正", "APIエラー時の強制続行処理を追加"] },
+  { version: "Ver 0.21", date: "2026/01/21", content: ["回答カード取得ロジックの修正（Firebase優先）", "APIエラー時の動作安定化"] },
+  { version: "Ver 0.20", date: "2026/01/21", content: ["効果音再生エラーの完全修正", "変数名の統一"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -93,8 +93,7 @@ const formatTime = (ms) => {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
 
-// --- Web Audio API Logic ---
-// 実際の音を鳴らす関数（コンポーネント外に定義）
+// --- Web Audio API Helper ---
 const playOscillatorSound = (ctx, type, volume) => {
   if (!ctx || volume <= 0) return;
   try {
@@ -311,7 +310,7 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playOscillatorSound(ctx, type, volume); // 修正: playSynthSound -> playOscillatorSound
+          playOscillatorSound(ctx, type, volume); // 修正箇所
       }
   };
 
@@ -392,7 +391,6 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
-
   const getAverageRadar = () => {
       if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
       const sum = gameRadars.reduce((acc, curr) => ({
@@ -463,15 +461,16 @@ export default function AiOgiriApp() {
       
       const fallback = FALLBACK_ANSWERS;
       let pool = [...fallback];
-      if (learned.pool) pool = [...pool, ...learned.pool];
+      if (learned.cardPool) pool = [...pool, ...learned.cardPool];
       const initialDeck = shuffleArray(pool).slice(0, 60);
       
+      // API呼び出しはバックグラウンドで行い、成功したらstateを更新する
       if (isAiActive) {
           fetchAiCards(10).then(res => {
               if (res) {
                   setCardDeck(prev => [...prev, ...res]);
               }
-          });
+          }).catch(e => console.log("Background fetch failed", e));
       }
       setCardDeck(initialDeck);
 
@@ -519,8 +518,16 @@ export default function AiOgiriApp() {
   const generateTopic = async (auto = false) => {
       if (isGeneratingTopic) return;
       setIsGeneratingTopic(true);
-      const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
-      const t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+      
+      // APIエラー時でも必ずフォールバックが機能するようにtry-catch
+      let t = "";
+      try {
+          const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
+          t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+      } catch (e) {
+          t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+      }
+
       if (auto) {
           setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
@@ -555,9 +562,15 @@ export default function AiOgiriApp() {
 
       let score = 50, comment = "...", radar = null;
       
-      if (isAiActive) {
-          const res = await fetchAiJudgment(currentTopic, text, false);
-          if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+      try {
+        if (isAiActive) {
+            const res = await fetchAiJudgment(currentTopic, text, false);
+            if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+        }
+      } catch(e) {
+        console.log("AI judgement failed, using fallback");
+        score = Math.floor(Math.random() * 40) + 40;
+        comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
       
       setAiComment(comment);
@@ -611,7 +624,10 @@ export default function AiOgiriApp() {
   };
 
   const rerollHand = () => {
-      playSound('card'); if(hasHandRerolled) return; setIsTimerRunning(false);
+      playSound('card'); 
+      if(hasHandRerolled) return; 
+      
+      setIsTimerRunning(false);
       const needed = 7; let newDeck = [...cardDeck];
       if (newDeck.length < needed) newDeck = [...newDeck, ...shuffleArray(FALLBACK_ANSWERS)];
       const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
@@ -648,11 +664,14 @@ export default function AiOgiriApp() {
     playSound('tap');
     if (hasTopicRerolled || isGeneratingTopic) return;
     setIsGeneratingTopic(true);
-    let topic = await fetchAiTopic();
-    if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
-    let finalTopic = topic.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
-    if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
-    setCurrentTopic(finalTopic);
+    let topic = "";
+    try {
+        const res = await fetchAiTopic();
+        topic = res || FALLBACK_TOPICS[0];
+    } catch(e) {
+        topic = FALLBACK_TOPICS[0];
+    }
+    setCurrentTopic(topic);
     setHasTopicRerolled(true);
     setIsGeneratingTopic(false);
   };
@@ -669,11 +688,7 @@ export default function AiOgiriApp() {
     if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
     
     if (currentDeck.length < currentHandSize) {
-        if (isAiActive) {
-            const newCards = await fetchAiCards(8);
-            if (newCards) { addCardsToDeck(newCards); currentDeck = [...currentDeck, ...newCards]; }
-        }
-        if (currentDeck.length < currentHandSize) currentDeck = [...currentDeck, ...shuffleArray(pool)];
+        currentDeck = [...currentDeck, ...shuffleArray(pool)];
     }
     const draw = (d, n) => {
           const h = []; const rest = [...d];
@@ -692,23 +707,6 @@ export default function AiOgiriApp() {
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     if (isAiActive) fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
-  };
-
-  const generateAiTopic = async () => {
-    playSound('tap');
-    if (isGeneratingTopic) return;
-    if (topicCreateRerollCount >= MAX_REROLL) {
-        alert("AI提案は1ターンにつき3回までです！");
-        return;
-    }
-    setIsGeneratingTopic(true);
-    let topic = await fetchAiTopic();
-    if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
-    const displayTopic = topic.replace(/\{placeholder\}/g, "___");
-    setManualTopicInput(displayTopic);
-    setLastAiGeneratedTopic(displayTopic);
-    setTopicCreateRerollCount(prev => prev + 1);
-    setIsGeneratingTopic(false);
   };
 
   const confirmTopicAI = async () => {
@@ -804,6 +802,12 @@ export default function AiOgiriApp() {
   const handleShare = () => {
     const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
+  };
+
+  const prepareNextSubmitter = (current, master, currentPlayers) => {
+    const next = (current + 1) % currentPlayers.length;
+    if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); }
+    else { setTurnPlayerIndex(next); setGamePhase('turn_change'); }
   };
 
   // --- Render (View) ---
