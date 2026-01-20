@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.25";
+const APP_VERSION = "Ver 0.27";
 const UPDATE_LOGS = [
-  { version: "Ver 0.25", date: "2026/01/21", content: ["効果音関数名の不一致を修正", "手札交換の変数名エラーを修正"] },
-  { version: "Ver 0.22", date: "2026/01/21", content: ["回答選択時の画面遷移を即時化", "エラー時の強制進行処理を追加"] },
+  { version: "Ver 0.27", date: "2026/01/21", content: ["回答カードの消費・補充ロジックを追加", "タイムアタックを回答回数制に変更"] },
+  { version: "Ver 0.26", date: "2026/01/21", content: ["回答ボタンの反応しないバグを修正", "AIコメント取得失敗時の予備動作を強化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -51,7 +51,7 @@ const FALLBACK_ANSWERS = [
   "誰もいない教室", "終わらない夏休み", "封印されし右腕", "実家のカルピス", "消えないデジタルタトゥー", "2年B組の田中",
   "週刊少年ジャンプ", "親指のささくれ", "隣の席の美少女", "地球外生命体", "謎の組織", "世界を救う鍵"
 ];
-const FALLBACK_COMMENTS = ["その発想はなかったわ！", "破壊力がすごいな！", "シュールすぎて腹筋崩壊ｗ", "それは反則やろ（笑）", "AIの計算を超えてるわ"];
+const FALLBACK_COMMENTS = ["その発想はなかったわ！", "破壊力がすごいな！", "シュールすぎて腹筋崩壊ｗ", "それは反則やろ（笑）", "AIの計算を超えてるわ", "ある意味哲学的やな"];
 
 // --- Firebase設定 ---
 const firebaseConfig = {
@@ -94,7 +94,6 @@ const formatTime = (ms) => {
 };
 
 // --- Web Audio API Helper ---
-// 関数名を統一 (playOscillatorSound)
 const playOscillatorSound = (ctx, type, volume) => {
   if (!ctx || volume <= 0) return;
   try {
@@ -212,7 +211,7 @@ const RankingList = ({ mode, data, unit }) => (
   <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
     <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
     {data && data.length > 0 ? (
-      <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? formatTime(rank.value) : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
+      <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? `${rank.value}回` : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
     ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
   </div>
 );
@@ -229,7 +228,7 @@ const InfoModal = ({ onClose, type }) => (
                <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Sparkles className="w-5 h-5 text-yellow-500" /></div><p>AIが採点<br/>＆ツッコミ</p></div>
              </div>
           </section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの手数を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの「回答回数」を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
           <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点！</li></ul></section>
         </div>
       ) : (
@@ -311,20 +310,19 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playOscillatorSound(ctx, type, volume); // 修正済み
+          playOscillatorSound(ctx, type, volume);
       }
   };
-
-  // --- Logic Helpers ---
-  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
-  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
-  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
 
   const handleBackToTitle = () => {
     if (window.confirm('タイトル画面に戻りますか？')) {
       playSound('tap'); setIsTimerRunning(false); setAppMode('title');
     }
   };
+
+  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
+  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
+  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
 
   const updateUserStats = (score, radar) => {
       setUserStats(prev => {
@@ -392,7 +390,6 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
-
   const getAverageRadar = () => {
       if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
       const sum = gameRadars.reduce((acc, curr) => ({
@@ -485,7 +482,7 @@ export default function AiOgiriApp() {
       };
 
       const { h: pHand, rest: d1 } = draw(initialDeck, 7);
-      setSinglePlayerHand(pHand); // 手札セット
+      setSinglePlayerHand(pHand);
 
       if (gameConfig.mode === 'single') {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
@@ -557,19 +554,36 @@ export default function AiOgiriApp() {
       submitAnswer(card);
   };
 
-  const submitAnswer = async (text) => {
+  const submitAnswer = async (text, isManual = false) => {
       playSound('decision'); setIsTimerRunning(false); setIsJudging(true);
       
+      // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
+      if (!isManual && gameConfig.mode === 'single') {
+          const newHand = singlePlayerHand.filter(c => c !== text);
+          let newDeck = [...cardDeck];
+          if (newDeck.length === 0) {
+              // デッキ枯渇時はフォールバックを使用
+              newDeck = shuffleArray([...FALLBACK_ANSWERS]);
+          }
+          const drawCard = newDeck.shift();
+          if (drawCard) newHand.push(drawCard);
+          
+          setSinglePlayerHand(newHand);
+          setCardDeck(newDeck);
+      }
+
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
       let score = 50, comment = "...", radar = null;
       
       try {
         if (isAiActive) {
-            const res = await fetchAiJudgment(currentTopic, text, false);
+            const res = await fetchAiJudgment(currentTopic, text, isManual);
             if (res) { score = res.score; comment = res.comment; radar = res.radar; }
-        }
+            else throw new Error("AI response null");
+        } else { throw new Error("AI inactive"); }
       } catch(e) {
+          // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
@@ -689,7 +703,11 @@ export default function AiOgiriApp() {
     if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
     
     if (currentDeck.length < currentHandSize) {
-        currentDeck = [...currentDeck, ...shuffleArray(pool)];
+        if (isAiActive) {
+            const newCards = await fetchAiCards(8);
+            if (newCards) { addCardsToDeck(newCards); currentDeck = [...currentDeck, ...newCards]; }
+        }
+        if (currentDeck.length < currentHandSize) currentDeck = [...currentDeck, ...shuffleArray(pool)];
     }
     const draw = (d, n) => {
           const h = []; const rest = [...d];
@@ -872,7 +890,7 @@ export default function AiOgiriApp() {
                 <div className="flex justify-between items-center mb-4 text-xs font-bold text-slate-500">
                     <span>{gameConfig.mode === 'single' ? gameConfig.singleMode.toUpperCase() : 'MULTI PLAY'}</span>
                     <span>Round {currentRound}</span>
-                    {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600">{displayTime}</span>}
+                    {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600">{answerCount}回</span>}
                 </div>
 
                 {gamePhase === 'drawing' && <div className="text-center py-20"><RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300"/></div>}
@@ -914,7 +932,7 @@ export default function AiOgiriApp() {
                         <div className="grid grid-cols-2 gap-3 mb-6">
                             {(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((t, i) => (
                                 <Card key={i} text={t} disabled={isJudging} onClick={() => {
-                                    if(gameConfig.mode==='single') handleSingleSubmit(t);
+                                    if(gameConfig.mode==='single') submitAnswer(t);
                                     else if(window.confirm('このカードで回答しますか？')) handleMultiSubmit(t);
                                 }} />
                             ))}
@@ -984,7 +1002,8 @@ export default function AiOgiriApp() {
                         <Trophy className="w-24 h-24 text-yellow-500 mx-auto mb-4" />
                         <h2 className="text-3xl font-black text-slate-800 mb-2">終了！</h2>
                         <div className="text-6xl font-black text-indigo-600 mb-8">
-                             {gameConfig.mode === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}点`}
+                             {gameConfig.mode === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}${gameConfig.singleMode === 'time_attack' ? '点' : '点'}`}
+                             {gameConfig.singleMode === 'time_attack' && <div className="text-lg mt-2 font-bold">回答数: {answerCount}回</div>}
                         </div>
                         {gameConfig.mode === 'single' && gameRadars.length > 0 && (
                             <div className="mb-6 flex justify-center flex-col items-center">
