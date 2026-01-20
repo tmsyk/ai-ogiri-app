@@ -6,17 +6,17 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
-// --- バージョン情報 ---
-const APP_VERSION = "Ver 0.14";
+// --- 設定・定数 ---
+const APP_VERSION = "Ver 0.15";
 const UPDATE_LOGS = [
+  { version: "Ver 0.15", date: "2026/01/21", content: ["重複コードの削除", "変数名の統一によるバグ修正"] },
   { version: "Ver 0.14", date: "2026/01/21", content: ["進行不能バグ（親決め処理）を修正", "API接続エラー時の挙動を改善"] },
-  { version: "Ver 0.13", date: "2026/01/21", content: ["ビルドエラー修正", "変数名の統一"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -24,9 +24,9 @@ const SURVIVAL_PASS_SCORE = 60;
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
-const TIME_LIMIT = 30;
-const WIN_SCORE_MULTI = 10;
-const MAX_REROLL = 3;
+const TIME_LIMIT_SECONDS = 30;
+const WINNING_SCORE_MULTI = 10;
+const MAX_REROLL_COUNT = 3;
 
 const FALLBACK_TOPICS = [
   "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。",
@@ -54,7 +54,7 @@ const FALLBACK_ANSWERS = [
 const FALLBACK_COMMENTS = ["その発想はなかったわ！", "破壊力がすごいな！", "シュールすぎて腹筋崩壊ｗ", "それは反則やろ（笑）", "AIの計算を超えてるわ"];
 
 // --- Firebase設定 ---
-const firebaseConfig = {
+const userFirebaseConfig = {
   apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSy...",
   authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
   projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
@@ -66,9 +66,9 @@ const firebaseConfig = {
 // --- Firebase初期化 ---
 let app, auth, db;
 try {
-  const conf = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : firebaseConfig;
-  if (conf && conf.apiKey && conf.apiKey !== "AIzaSy..." && !conf.apiKey.includes("process.env")) {
-      app = !getApps().length ? initializeApp(conf) : getApp();
+  const config = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : userFirebaseConfig;
+  if (config && config.apiKey && config.apiKey !== "AIzaSy..." && !config.apiKey.includes("process.env")) {
+      app = !getApps().length ? initializeApp(config) : getApp();
       auth = getAuth(app);
       db = getFirestore(app);
   }
@@ -253,30 +253,28 @@ export default function AiOgiriApp() {
   const [volume, setVolume] = useState(0.5);
   const [timeLimit, setTimeLimit] = useState(30);
   
-  // Game State
-  const [phase, setPhase] = useState('drawing');
-  const [round, setRound] = useState(1);
-  const [deck, setDeck] = useState([]);
-  const [hand, setHand] = useState([]);
+  const [gamePhase, setGamePhase] = useState('drawing'); // phase -> gamePhase (統一)
+  const [currentRound, setCurrentRound] = useState(1); // round -> currentRound (統一)
+  const [cardDeck, setCardDeck] = useState([]); // deck -> cardDeck (統一)
+  const [singlePlayerHand, setSinglePlayerHand] = useState([]); // hand -> singlePlayerHand (統一)
   const [players, setPlayers] = useState([]);
-  const [masterIdx, setMasterIndex] = useState(0); // 修正：変数名統一
-  const [turnIdx, setTurnIdx] = useState(0);
-  const [topic, setTopic] = useState('');
-  const [manualTopic, setManualTopic] = useState('');
-  const [manualAnswer, setManualAnswer] = useState('');
-  const [selectedCard, setSelectedCard] = useState(null);
+  const [masterIndex, setMasterIndex] = useState(0);
+  const [turnPlayerIndex, setTurnPlayerIndex] = useState(0);
+  const [currentTopic, setCurrentTopic] = useState(''); // topic -> currentTopic (統一)
+  const [manualTopicInput, setManualTopicInput] = useState(''); // manualTopic -> manualTopicInput (統一)
+  const [manualAnswerInput, setManualAnswerInput] = useState(''); // manualAnswer -> manualAnswerInput (統一)
+  const [singleSelectedCard, setSingleSelectedCard] = useState(null); // selectedCard -> singleSelectedCard (統一)
   const [submissions, setSubmissions] = useState([]);
   const [selectedSubmission, setSelectedSubmission] = useState(null);
   const [result, setResult] = useState(null); 
   const [aiComment, setAiComment] = useState('');
   
-  // Flags
   const [isAiActive, setIsAiActive] = useState(true);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [isGeneratingTopic, setIsGeneratingTopic] = useState(false); // isGenerating -> isGeneratingTopic
   const [isJudging, setIsJudging] = useState(false);
   const [isCheckingTopic, setIsCheckingTopic] = useState(false);
   const [timeLeft, setTimeLeft] = useState(30);
-  const [isTimerActive, setIsTimerActive] = useState(false);
+  const [isTimerRunning, setIsTimerRunning] = useState(false); // isTimerActive -> isTimerRunning
   const [hasTopicRerolled, setHasTopicRerolled] = useState(false);
   const [hasHandRerolled, setHasHandRerolled] = useState(false);
   const [isRerollingHand, setIsRerollingHand] = useState(false);
@@ -291,10 +289,7 @@ export default function AiOgiriApp() {
   const [gameRadars, setGameRadars] = useState([]);
   const [isCopied, setIsCopied] = useState(false);
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
-  const [singlePlayerHand, setSinglePlayerHand] = useState([]);
-  const [singleSelectedCard, setSingleSelectedCard] = useState(null);
 
-  // Data
   const [currentUser, setCurrentUser] = useState(null);
   const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, averageRadar: {} });
   const [hallOfFame, setHallOfFame] = useState([]);
@@ -304,8 +299,8 @@ export default function AiOgiriApp() {
   const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
 
   const [activeModal, setActiveModal] = useState(null);
-
   const audioCtx = useRef(null);
+
   const playSound = (type) => {
       if (volume <= 0 || typeof window === 'undefined') return;
       if (!audioCtx.current) {
@@ -319,15 +314,16 @@ export default function AiOgiriApp() {
       }
   };
 
+  const handleBackToTitle = () => {
+    if (window.confirm('タイトル画面に戻りますか？')) {
+      playSound('tap'); setIsTimerRunning(false); setAppMode('title');
+    }
+  };
+
+  // --- Logic Helpers ---
   const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
   const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
   const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
-
-  const handleBackToTitle = () => {
-    if (window.confirm('タイトル画面に戻りますか？')) {
-      playSound('tap'); setIsTimerActive(false); setAppMode('title');
-    }
-  };
 
   const updateUserStats = (score, radar) => {
       setUserStats(prev => {
@@ -374,7 +370,7 @@ export default function AiOgiriApp() {
     if (currentUser && db) { const ref = getDocRef('shared_db', 'learned_data'); if (ref) await updateDoc(ref, { goodAnswers: arrayUnion(newAnswer) }).catch(()=>{}); }
   };
   const resetLearnedData = () => {
-    if (window.confirm("保存データをリセットしますか？")) {
+    if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
       const emptyData = { topics: [], answers: [], pool: [] };
       setLearned(emptyData);
       localStorage.removeItem('aiOgiriLearnedData');
@@ -395,7 +391,6 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
-
   const getAverageRadar = () => {
       if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
       const sum = gameRadars.reduce((acc, curr) => ({
@@ -405,6 +400,7 @@ export default function AiOgiriApp() {
       return { surprise: sum.surprise/count, context: sum.context/count, punchline: sum.punchline/count, humor: sum.humor/count, intelligence: sum.intelligence/count };
   };
 
+  // --- Effects ---
   useEffect(() => {
     const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
     const localLearned = localStorage.getItem('aiOgiriLearnedData'); if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); if (parsed.cardPool) parsed.cardPool.forEach(c => usedCardsRef.current.add(c)); }
@@ -428,14 +424,14 @@ export default function AiOgiriApp() {
 
   useEffect(() => {
       let t;
-      if (isTimerActive && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000);
-      else if (isTimerActive && timeLeft === 0) { setIsTimerActive(false); handleTimeUp(); }
+      if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000);
+      else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); }
       return () => clearInterval(t);
-  }, [isTimerActive, timeLeft]);
+  }, [isTimerRunning, timeLeft]);
 
   useEffect(() => {
       let t;
-      if (appMode === 'game' && config.singleMode === 'time_attack' && startTime && !finishTime) {
+      if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) {
           t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100);
       }
       return () => clearInterval(t);
@@ -457,10 +453,11 @@ export default function AiOgiriApp() {
   const fetchAiCards = async (count=10) => { const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:具体的,ジャンルバラバラ,既存回避。出力: {"answers": ["...", ...]}`); if(res?.answers) saveGeneratedCards(res.answers); return res?.answers || null; };
   const fetchAiJudgment = async (topic, answer, isManual) => { const p = isManual ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.20文字ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`; return await callGemini(p); };
 
+  // --- Game Control ---
   const initGame = async () => {
-      playSound('decision'); setAppMode('game'); setPhase('drawing'); setRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
+      playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
       setGameRadars([]); 
-      if (config.singleMode === 'time_attack') setStartTime(Date.now());
+      if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       const fallback = FALLBACK_ANSWERS;
       let pool = [...fallback];
@@ -468,13 +465,9 @@ export default function AiOgiriApp() {
       const initialDeck = shuffleArray(pool).slice(0, 60);
       
       if (isAiActive) {
-          fetchAiCards(10).then(res => {
-              if (res) {
-                  setDeck(prev => [...prev, ...res]);
-              }
-          });
+          fetchAiCards(10).then(res => { if (res) setCardDeck(prev => [...prev, ...res]); });
       }
-      setDeck(initialDeck);
+      setCardDeck(initialDeck);
 
       const draw = (d, n) => {
           const h = []; const rest = [...d];
@@ -486,60 +479,60 @@ export default function AiOgiriApp() {
       };
 
       const { h: pHand, rest: d1 } = draw(initialDeck, 7);
-      if (config.type === 'single') {
+      if (gameConfig.mode === 'single') {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
           setMasterIndex(0);
       } else {
           let currentD = d1;
           const newPlayers = [];
-          for(let i=0; i<config.playerCount; i++){
+          for(let i=0; i<gameConfig.playerCount; i++){
               const res = draw(currentD, 7);
               newPlayers.push({ id: i, name: multiNames[i] || `P${i+1}`, score: 0, hand: res.h });
               currentD = res.rest;
           }
           setPlayers(newPlayers);
-          setDeck(currentD);
-          setMasterIndex(Math.floor(Math.random() * config.playerCount));
+          setCardDeck(currentD);
+          setMasterIndex(Math.floor(Math.random() * gameConfig.playerCount));
       }
       
-      setTimeout(() => startRound(config.type === 'single' ? 0 : 0), 500);
+      setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
 
   const startRound = (turn) => {
-      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopic(''); setManualAnswer('');
+      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
       setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHandRerolled(false); setTopicCreateRerollCount(0);
       setTurnIdx(turn); 
       
-      if (config.type === 'single' && config.singleMode !== 'freestyle') {
+      if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
           generateTopic(true);
       } else {
-          setPhase('master_topic');
+          setGamePhase('master_topic');
       }
   };
 
   const generateTopic = async (auto = false) => {
-      if (isGenerating) return;
-      setIsGenerating(true);
+      if (isGeneratingTopic) return;
+      setIsGeneratingTopic(true);
       const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
       const t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
       if (auto) {
-          setTopic(t); setPhase('answer_input'); setTimeLeft(timeLimit); 
-          if (config.singleMode !== 'freestyle') setIsTimerActive(true);
+          setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
+          if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       } else {
-          setManualTopic(t.replace('{placeholder}', '___'));
+          setManualTopicInput(t.replace('{placeholder}', '___'));
       }
-      setIsGenerating(false);
+      setIsGeneratingTopic(false);
   };
 
   const confirmTopic = () => {
       playSound('decision');
-      const t = manualTopic.replace(/___+/g, '{placeholder}');
-      setTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
-      if (config.type === 'single') {
-          setPhase('answer_input'); setTimeLeft(timeLimit); 
-          if(config.singleMode!=='freestyle') setIsTimerActive(true);
+      const t = manualTopicInput.replace(/___+/g, '{placeholder}');
+      setCurrentTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
+      if (gameConfig.mode === 'single') {
+          setGamePhase('answer_input'); setTimeLeft(timeLimit); 
+          if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true);
       } else {
-          setPhase('turn_change'); setTurnIdx((masterIdx + 1) % players.length);
+          setGamePhase('turn_change'); setTurnIdx((masterIndex + 1) % players.length);
       }
   };
 
@@ -550,14 +543,14 @@ export default function AiOgiriApp() {
   };
 
   const submitAnswer = async (text) => {
-      playSound('decision'); setIsTimerActive(false); setIsJudging(true);
+      playSound('decision'); setIsTimerRunning(false); setIsJudging(true);
       
-      if (config.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
+      if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
       let score = 50, comment = "...", radar = null;
       
       if (isAiActive) {
-          const res = await fetchAiJudgment(topic, text, false);
+          const res = await fetchAiJudgment(currentTopic, text, false);
           if (res) { score = res.score; comment = res.comment; radar = res.radar; }
       }
       
@@ -569,22 +562,20 @@ export default function AiOgiriApp() {
       }
 
       if (score >= HALL_OF_FAME_THRESHOLD) {
-          const entry = { topic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
+          const entry = { topic: currentTopic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
       }
       
-      let isGameOver = false;
-      if (config.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
+      if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
           setIsSurvivalGameOver(true);
-          isGameOver = true;
       }
-      if (config.singleMode === 'time_attack') {
+      if (gameConfig.singleMode === 'time_attack') {
            if (players[0].score + score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
       }
       
       setPlayers(prev => {
           const newPlayers = [...prev];
-          const pIndex = prev.findIndex(p => p.id === (config.type==='single' ? 0 : turnIdx));
+          const pIndex = prev.findIndex(p => p.id === (gameConfig.mode==='single' ? 0 : turnIdx));
           if (pIndex >= 0) newPlayers[pIndex].score += score;
           return newPlayers;
       });
@@ -592,80 +583,80 @@ export default function AiOgiriApp() {
       setResult({ answer: text, score, comment, radar });
       setSelectedSubmission({ answerText: text, score, radar });
       
-      setIsJudging(false); playSound('result'); setPhase('result');
+      setIsJudging(false); playSound('result'); setGamePhase('result');
   };
 
   const nextGameRound = () => {
       playSound('tap');
-      if (config.type === 'single') {
-          if (config.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setPhase('final_result'); }
-          if (config.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', round - 1); return setPhase('final_result'); }
-          if (config.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setPhase('final_result'); }
+      if (gameConfig.mode === 'single') {
+          if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
+          if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', currentRound - 1); return setGamePhase('final_result'); }
+          if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setGamePhase('final_result'); }
       } else {
-          if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setPhase('final_result');
+          if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
       }
       
-      setRound(r => r + 1);
-      const nextMaster = config.type === 'multi' ? (masterIdx + 1) % players.length : 0;
+      setCurrentRound(r => r + 1);
+      const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
       setMasterIndex(nextMaster);
-      startRound(config.type === 'single' ? 0 : nextMaster);
+      startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
   };
 
   const rerollHand = () => {
-      playSound('card'); if(handRerolled) return; setIsTimerActive(false);
-      const needed = 7; let newDeck = [...deck];
+      playSound('card'); if(handRerolled) return; setIsTimerRunning(false);
+      const needed = 7; let newDeck = [...cardDeck];
       if (newDeck.length < needed) newDeck = [...newDeck, ...shuffleArray(FALLBACK_ANSWERS)];
       const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
-      setSinglePlayerHand(newHand); setDeck(newDeck); setHandRerolled(true);
-      if (config.singleMode !== 'freestyle') setIsTimerActive(true);
-      if (isAiActive) fetchAiCards(5).then(c => { if(c) setDeck(p => [...p, ...c]); });
+      setSinglePlayerHand(newHand); setCardDeck(newDeck); setHandRerolled(true);
+      if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
+      if (isAiActive) fetchAiCards(5).then(c => { if(c) setCardDeck(p => [...p, ...c]); });
   };
   
   const handleMultiSubmit = (text) => {
       setSubmissions(prev => [...prev, { playerId: players[turnIdx].id, answerText: text }]);
       setPlayers(prev => prev.map(p => p.id === players[turnIdx].id ? { ...p, hand: p.hand.filter(c => c !== text) } : p));
-      setManualAnswer('');
+      setManualAnswerInput('');
       const nextTurn = (turnIdx + 1) % players.length;
-      if (nextTurn === masterIdx) { 
-          let dummy = deck[0] || "ダミー";
+      if (nextTurn === masterIndex) { 
+          let dummy = cardDeck[0] || "ダミー";
           setSubmissions(prev => shuffleArray([...prev, { playerId: 'dummy', answerText: dummy, isDummy: true }]));
-          setPhase('judging');
+          setGamePhase('judging');
       } else {
-          setTurnIdx(nextTurn); setPhase('turn_change');
+          setTurnIdx(nextTurn); setGamePhase('turn_change');
       }
   };
   
   const handleJudge = (sub) => {
       playSound('decision'); setSelectedSubmission(sub);
       setPlayers(prev => prev.map(p => {
-          if (sub.isDummy && p.id === players[masterIdx].id) return { ...p, score: p.score - 1 };
+          if (sub.isDummy && p.id === players[masterIndex].id) return { ...p, score: p.score - 1 };
           if (!sub.isDummy && p.id === sub.playerId) return { ...p, score: p.score + 1 };
           return p;
       }));
-      playSound('result'); setPhase('result');
+      playSound('result'); setGamePhase('result');
   };
 
   const handleTopicReroll = async () => {
     playSound('tap');
-    if (hasTopicRerolled || isGenerating) return;
-    setIsGenerating(true);
+    if (hasTopicRerolled || isGeneratingTopic) return;
+    setIsGeneratingTopic(true);
     let topic = await fetchAiTopic();
     if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
     let finalTopic = topic.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!finalTopic.includes('{placeholder}')) finalTopic += " {placeholder}";
-    setTopic(finalTopic);
+    setCurrentTopic(finalTopic);
     setHasTopicRerolled(true);
-    setIsGenerating(false);
+    setIsGeneratingTopic(false);
   };
 
   const handleHandReroll = async () => {
     playSound('card');
     if (hasHandRerolled || isRerollingHand) return;
     setIsRerollingHand(true);
-    setIsTimerActive(false);
+    setIsTimerRunning(false);
 
     const currentHandSize = singlePlayerHand.length;
-    let currentDeck = [...deck];
+    let currentDeck = [...cardDeck];
     let pool = [...FALLBACK_ANSWERS];
     if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
     
@@ -686,39 +677,39 @@ export default function AiOgiriApp() {
     };
     const { h: newHand, rest: remainingDeck } = draw(currentDeck, currentHandSize);
     setSinglePlayerHand(newHand);
-    setDeck(remainingDeck);
+    setCardDeck(remainingDeck);
     
     setHandRerolled(true);
     setIsRerollingHand(false);
     
-    if (config.singleMode !== 'freestyle') setIsTimerActive(true);
+    if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     if (isAiActive) fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
   };
 
   const generateAiTopic = async () => {
     playSound('tap');
-    if (isGenerating) return;
-    if (topicCreateRerollCount >= MAX_REROLL) {
+    if (isGeneratingTopic) return;
+    if (topicCreateRerollCount >= MAX_REROLL_COUNT) {
         alert("AI提案は1ターンにつき3回までです！");
         return;
     }
-    setIsGenerating(true);
+    setIsGeneratingTopic(true);
     let topic = await fetchAiTopic();
     if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
     const displayTopic = topic.replace(/\{placeholder\}/g, "___");
-    setManualTopic(displayTopic);
+    setManualTopicInput(displayTopic);
     setLastAiGeneratedTopic(displayTopic);
     setTopicCreateRerollCount(prev => prev + 1);
-    setIsGenerating(false);
+    setIsGeneratingTopic(false);
   };
 
-  const confirmTopic = async () => {
+  const confirmTopicAI = async () => {
     playSound('decision');
-    if (!manualTopic.trim()) return;
-    const isAiOrigin = manualTopic === lastAiGeneratedTopic;
+    if (!manualTopicInput.trim()) return;
+    const isAiOrigin = manualTopicInput === lastAiGeneratedTopic;
     if (!isAiOrigin) {
         setIsCheckingTopic(true);
-        if (await checkContentSafety(manualTopic)) {
+        if (await checkContentSafety(manualTopicInput)) {
             playSound('timeup');
             alert("⚠️ AI判定：不適切な表現が含まれています。");
             setIsCheckingTopic(false);
@@ -726,36 +717,36 @@ export default function AiOgiriApp() {
         }
         setIsCheckingTopic(false);
     }
-    let topic = manualTopic.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
+    let topic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
     if (!topic.includes('{placeholder}')) topic += " {placeholder}";
     if (!topicsList.includes(topic)) {
         setTopicsList(prev => [...prev, topic]);
         saveLearnedTopic(topic);
     }
-    setTopic(topic);
-    if (config.type === 'single') {
-        setPhase('answer_input');
-        if (config.singleMode !== 'freestyle') setIsTimerActive(true);
-    } else prepareNextSubmitter(masterIdx, masterIdx, players);
+    setCurrentTopic(topic);
+    if (gameConfig.mode === 'single') {
+        setGamePhase('answer_input');
+        if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
+    } else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
 
   const handleSingleSubmitManual = async (text) => {
     if (!text || isJudging) return;
     playSound('decision');
-    setIsTimerActive(false);
+    setIsTimerRunning(false);
     setIsJudging(true);
-    if (config.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
+    if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
-    const result = await fetchAiJudgment(topic, text, true);
+    const result = await fetchAiJudgment(currentTopic, text, true);
     if (result && result.isInappropriate) {
         playSound('timeup');
         alert("⚠️ AI判定：不適切な表現が含まれています。");
         setIsJudging(false);
-        setIsTimerActive(true);
+        setIsTimerRunning(true);
         return;
     }
     setSingleSelectedCard(text);
-    setPhase('judging');
+    setGamePhase('judging');
     let score = 0;
     if (result) {
         setAiComment(result.comment);
@@ -763,7 +754,7 @@ export default function AiOgiriApp() {
         if (result.radar) updateUserStats(score, result.radar);
         if (score >= HALL_OF_FAME_THRESHOLD) {
             saveToHallOfFame({
-                topic: topic.replace('{placeholder}', '___'),
+                topic: currentTopic.replace('{placeholder}', '___'),
                 answer: text,
                 score: score,
                 comment: result.comment,
@@ -782,28 +773,32 @@ export default function AiOgiriApp() {
     setPlayers(prev => {
         const newP = [...prev];
         newP[0].score += score;
-        if (config.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setIsSurvivalGameOver(true);
-        if (config.singleMode === 'time_attack' && newP[0].score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
+        if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setIsSurvivalGameOver(true);
+        if (gameConfig.singleMode === 'time_attack' && newP[0].score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
         return newP;
     });
     setSelectedSubmission({ answerText: text, score, radar: result?.radar });
     playSound('result');
     setIsJudging(false);
-    setPhase('result');
+    setGamePhase('result');
   };
 
   const handleTopicFeedback = (isGood) => {
     playSound('tap');
     setTopicFeedback(isGood ? 'good' : 'bad');
-    if (isGood && topic) saveLearnedTopic(topic);
+    if (isGood && currentTopic) saveLearnedTopic(currentTopic);
   };
   const handleAiFeedback = (isGood) => {
     playSound('tap');
     setAiFeedback(isGood ? 'good' : 'bad');
     if (isGood && selectedSubmission?.answerText) saveLearnedAnswer(selectedSubmission.answerText);
   };
+  const handleShare = () => {
+    const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
+    if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
+  };
 
-  // --- Render ---
+  // --- Render (View) ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
        <header className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-30">
@@ -822,8 +817,8 @@ export default function AiOgiriApp() {
                   <p className="text-slate-500 mb-8">{APP_VERSION}<br/><span className="text-xs text-indigo-500">Powered by Gemini</span></p>
                   
                   <div className="space-y-4 mb-8">
-                      <button onClick={() => { playSound('decision'); setConfig({...config, type: 'single'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-indigo-500 transition-all"><User/> 一人で遊ぶ</button>
-                      <button onClick={() => { playSound('decision'); setConfig({...config, type: 'multi'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-amber-500 transition-all"><Users/> みんなで遊ぶ</button>
+                      <button onClick={() => { playSound('decision'); setGameConfig({...gameConfig, mode: 'single'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-indigo-500 transition-all"><User/> 一人で遊ぶ</button>
+                      <button onClick={() => { playSound('decision'); setGameConfig({...gameConfig, mode: 'multi'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-amber-500 transition-all"><Users/> みんなで遊ぶ</button>
                   </div>
 
                   <div className="flex justify-center gap-4">
@@ -839,19 +834,19 @@ export default function AiOgiriApp() {
               <div className="py-6 animate-in slide-in-from-right">
                   <h2 className="text-2xl font-bold mb-6 text-center">設定</h2>
                   <div className="bg-white p-6 rounded-2xl shadow-sm mb-6">
-                      {config.type === 'single' ? (
+                      {gameConfig.mode === 'single' ? (
                           <div className="space-y-3">
                               {['score_attack', 'survival', 'time_attack', 'freestyle'].map(m => (
-                                  <button key={m} onClick={() => { playSound('tap'); setConfig({...config, singleMode: m}); }} className={`w-full p-4 rounded-xl border-2 text-left font-bold flex justify-between ${config.singleMode === m ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200'}`}>
+                                  <button key={m} onClick={() => { playSound('tap'); setGameConfig({...gameConfig, singleMode: m}); }} className={`w-full p-4 rounded-xl border-2 text-left font-bold flex justify-between ${gameConfig.singleMode === m ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200'}`}>
                                       <span>{m === 'score_attack' ? '🏆 スコアアタック' : m === 'survival' ? '💀 サバイバル' : m === 'time_attack' ? '⏱️ タイムアタック' : '♾️ フリースタイル'}</span>
-                                      {config.singleMode === m && <Check className="text-indigo-600"/>}
+                                      {gameConfig.singleMode === m && <Check className="text-indigo-600"/>}
                                   </button>
                               ))}
                           </div>
                       ) : (
                           <div>
-                              <label className="block font-bold mb-2">参加人数: {config.playerCount}人</label>
-                              <input type="range" min="2" max="10" value={config.playerCount} onChange={(e) => setConfig({...config, playerCount: parseInt(e.target.value)})} className="w-full accent-indigo-600"/>
+                              <label className="block font-bold mb-2">参加人数: {gameConfig.playerCount}人</label>
+                              <input type="range" min="2" max="10" value={gameConfig.playerCount} onChange={(e) => setGameConfig({...gameConfig, playerCount: parseInt(e.target.value)})} className="w-full accent-indigo-600"/>
                           </div>
                       )}
                   </div>
@@ -862,36 +857,36 @@ export default function AiOgiriApp() {
           {appMode === 'game' && (
               <>
                 <div className="flex justify-between items-center mb-4 text-xs font-bold text-slate-500">
-                    <span>{config.type === 'single' ? config.singleMode.toUpperCase() : 'MULTI PLAY'}</span>
-                    <span>Round {round}</span>
-                    {config.singleMode === 'time_attack' && <span className="text-blue-600">{displayTime}</span>}
+                    <span>{gameConfig.mode === 'single' ? gameConfig.singleMode.toUpperCase() : 'MULTI PLAY'}</span>
+                    <span>Round {currentRound}</span>
+                    {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600">{displayTime}</span>}
                 </div>
 
-                {phase === 'drawing' && <div className="text-center py-20"><RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300"/></div>}
+                {gamePhase === 'drawing' && <div className="text-center py-20"><RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300"/></div>}
 
-                {phase === 'master_topic' && (
+                {gamePhase === 'master_topic' && (
                     <div className="bg-white p-6 rounded-2xl shadow-sm animate-in fade-in">
                         <h2 className="text-xl font-bold mb-4 text-center">お題を決めてください</h2>
-                        <textarea value={manualTopic} onChange={(e) => setManualTopic(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl mb-4 border" placeholder="例：冷蔵庫を開けたら..." />
+                        <textarea value={manualTopicInput} onChange={(e) => setManualTopicInput(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl mb-4 border" placeholder="例：冷蔵庫を開けたら..." />
                         <div className="flex gap-2">
-                            <button onClick={() => generateAiTopic()} disabled={isGenerating} className="flex-1 py-3 bg-indigo-100 text-indigo-700 font-bold rounded-xl flex justify-center items-center gap-2"><Wand2 className="w-4 h-4"/> AI作成</button>
-                            <button onClick={confirmTopic} className="flex-1 py-3 bg-slate-800 text-white font-bold rounded-xl">決定</button>
+                            <button onClick={() => generateAiTopic()} disabled={isGeneratingTopic} className="flex-1 py-3 bg-indigo-100 text-indigo-700 font-bold rounded-xl flex justify-center items-center gap-2"><Wand2 className="w-4 h-4"/> AI作成</button>
+                            <button onClick={confirmTopicAI} className="flex-1 py-3 bg-slate-800 text-white font-bold rounded-xl">決定</button>
                         </div>
                     </div>
                 )}
                 
-                {phase === 'turn_change' && (
+                {gamePhase === 'turn_change' && (
                     <div className="text-center py-10 animate-in fade-in">
-                        <h2 className="text-2xl font-bold mb-4">次は {players[turnIdx].name} さんの番です</h2>
-                        <button onClick={() => setPhase('answer_input')} className="px-8 py-3 bg-slate-800 text-white font-bold rounded-full">回答する</button>
+                        <h2 className="text-2xl font-bold mb-4">次は {players[turnPlayerIndex].name} さんの番です</h2>
+                        <button onClick={() => setGamePhase('answer_input')} className="px-8 py-3 bg-slate-800 text-white font-bold rounded-full">回答する</button>
                     </div>
                 )}
 
-                {phase === 'answer_input' && (
+                {gamePhase === 'answer_input' && (
                     <div className="animate-in slide-in-from-bottom-4">
-                        <TopicDisplay topic={topic} answer={null} />
+                        <TopicDisplay topic={currentTopic} answer={null} gamePhase={gamePhase} mode={gameConfig.mode} topicFeedback={topicFeedback} onFeedback={handleTopicFeedback} onReroll={handleTopicReroll} hasRerolled={hasTopicRerolled} isGenerating={isGeneratingTopic} singleMode={gameConfig.singleMode} />
                         
-                        {isTimerActive && (
+                        {isTimerRunning && (
                             <div className="mb-4">
                                 <div className="flex justify-between text-xs font-bold mb-1"><span>残り時間</span><span className="text-red-500">{timeLeft}秒</span></div>
                                 <div className="w-full bg-slate-200 h-2 rounded-full"><div className="bg-indigo-500 h-full rounded-full transition-all duration-1000 ease-linear" style={{ width: `${(timeLeft/timeLimit)*100}%` }}></div></div>
@@ -900,13 +895,13 @@ export default function AiOgiriApp() {
 
                         <div className="flex justify-between items-center mb-2">
                             <span className="font-bold text-sm text-slate-500">手札から選択</span>
-                            {config.type === 'single' && <button onClick={handleHandReroll} disabled={hasHandRerolled} className="text-xs bg-slate-100 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"><RefreshCw className="w-3 h-3"/> 手札交換 {hasHandRerolled ? '(済)' : ''}</button>}
+                            {gameConfig.mode === 'single' && <button onClick={handleHandReroll} disabled={hasHandRerolled} className="text-xs bg-slate-100 px-2 py-1 rounded flex items-center gap-1 disabled:opacity-50"><RefreshCw className="w-3 h-3"/> 手札交換 {hasHandRerolled ? '(済)' : ''}</button>}
                         </div>
 
                         <div className="grid grid-cols-2 gap-3 mb-6">
-                            {(config.type === 'single' ? singlePlayerHand : players[turnIdx].hand).map((t, i) => (
+                            {(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((t, i) => (
                                 <Card key={i} text={t} disabled={isJudging} onClick={() => {
-                                    if(config.type==='single') handleSingleSubmit(t);
+                                    if(gameConfig.mode==='single') handleSingleSubmit(t);
                                     else if(window.confirm('このカードで回答しますか？')) handleMultiSubmit(t);
                                 }} />
                             ))}
@@ -915,23 +910,23 @@ export default function AiOgiriApp() {
                         <div className="bg-white p-4 rounded-xl shadow-sm">
                             <p className="font-bold text-xs text-slate-400 mb-2">自由に回答</p>
                             <div className="flex gap-2">
-                                <input value={manualAnswer} onChange={(e) => setManualAnswer(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
+                                <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
                                 <button onClick={() => {
-                                    if(config.type==='single') handleSingleSubmitManual(manualAnswer);
-                                    else handleMultiSubmit(manualAnswer);
-                                }} disabled={!manualAnswer.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
+                                    if(gameConfig.mode==='single') handleSingleSubmitManual(manualAnswerInput);
+                                    else handleMultiSubmit(manualAnswerInput);
+                                }} disabled={!manualAnswerInput.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
                             </div>
                         </div>
                     </div>
                 )}
                 
-                {phase === 'judging' && (
-                   config.type === 'single' ? (
+                {gamePhase === 'judging' && (
+                   gameConfig.mode === 'single' ? (
                        <div className="text-center py-20"><Sparkles className="w-16 h-16 text-amber-500 animate-pulse mx-auto mb-4"/><h3 className="text-2xl font-bold text-slate-800">審査中...</h3></div>
                    ) : (
                        <div className="animate-in fade-in">
                            <h2 className="text-center font-bold mb-4">{players[masterIdx].name}さんが選んでください</h2>
-                           <TopicDisplay topic={topic} answer={null} />
+                           <TopicDisplay topic={currentTopic} answer={null} />
                            <div className="space-y-2 mt-4">
                                {submissions.map((sub, i) => (
                                    <button key={i} onClick={() => handleJudge(sub)} className="w-full p-4 bg-white border-2 rounded-xl text-left font-bold">{sub.answerText}</button>
@@ -941,16 +936,16 @@ export default function AiOgiriApp() {
                    )
                 )}
 
-                {phase === 'result' && (
+                {gamePhase === 'result' && (
                     <div className="text-center animate-in zoom-in">
                         <div className="bg-white p-6 rounded-3xl shadow-xl mb-6">
                             <p className="text-sm text-slate-400 font-bold mb-2">お題</p>
-                            <p className="text-lg font-bold mb-6">{topic.replace('{placeholder}', '___')}</p>
+                            <p className="text-lg font-bold mb-6">{currentTopic.replace('{placeholder}', '___')}</p>
                             <div className="border-t border-slate-100 my-4"></div>
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
                             
-                            {config.type === 'single' ? (
+                            {gameConfig.mode === 'single' ? (
                                 <>
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
                                 <div className="bg-slate-100 p-4 rounded-xl text-left inline-block"><p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p><p className="text-sm text-slate-800">「{aiComment}」</p></div>
@@ -963,22 +958,22 @@ export default function AiOgiriApp() {
                         </div>
                         <button onClick={nextGameRound} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">
                             {/* 次へボタンの表示制御（勝利判定など） */}
-                            {(config.type === 'single' && config.singleMode === 'score_attack' && round >= TOTAL_ROUNDS) ? '結果発表へ' :
-                             (config.type === 'single' && config.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
-                             (config.type === 'single' && config.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
-                             (config.type === 'multi' && players.some(p => p.score >= WIN_SCORE_MULTI)) ? '結果発表へ' : '次のラウンドへ'}
+                            {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) ? '結果発表へ' :
+                             (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
+                             (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
+                             (gameConfig.mode === 'multi' && players.some(p => p.score >= WIN_SCORE_MULTI)) ? '結果発表へ' : '次のラウンドへ'}
                         </button>
                     </div>
                 )}
 
-                {phase === 'final_result' && (
+                {gamePhase === 'final_result' && (
                     <div className="text-center py-10 animate-in zoom-in">
                         <Trophy className="w-24 h-24 text-yellow-500 mx-auto mb-4" />
                         <h2 className="text-3xl font-black text-slate-800 mb-2">終了！</h2>
                         <div className="text-6xl font-black text-indigo-600 mb-8">
-                             {config.type === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}点`}
+                             {gameConfig.mode === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}点`}
                         </div>
-                        {config.type === 'single' && gameRadars.length > 0 && (
+                        {gameConfig.mode === 'single' && gameRadars.length > 0 && (
                             <div className="mb-6 flex justify-center flex-col items-center">
                                 <p className="text-sm font-bold text-slate-500 mb-2">今回のゲーム評価</p>
                                 <RadarChart data={getAverageRadar()} size={180} />
