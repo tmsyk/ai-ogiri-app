@@ -13,11 +13,12 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.23"; // バージョンアップ
+const APP_VERSION = "Ver 0.28"; // バージョンアップ
 const UPDATE_LOGS = [
-  { version: "Ver 0.23", date: "2026/01/21", content: ["回答クリック時の動作エラーを修正", "カード追加処理の修正"] },
-  { version: "Ver 0.22", date: "2026/01/21", content: ["手札が表示されない不具合を修正", "ゲーム初期化処理の改善"] },
-  { version: "Ver 0.21", date: "2026/01/21", content: ["回答カード取得ロジックの修正", "APIエラー時の動作安定化"] },
+  { version: "Ver 0.28", date: "2026/01/24", content: ["Gemini APIキーの環境変数(Vercel)対応", "システム安定性の向上"] },
+  { version: "Ver 0.27", date: "2026/01/24", content: ["システムエラー修正: Firestoreパスの正規化", "データ型チェックによるクラッシュ防止"] },
+  { version: "Ver 0.26", date: "2026/01/24", content: ["システムエラー修正: process is not defined対応", "環境変数読み込みロジックの改善"] },
+  { version: "Ver 0.25", date: "2026/01/24", content: ["セキュリティ強化: APIキーを環境変数化", "Vercelデプロイ対応"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -53,25 +54,56 @@ const FALLBACK_ANSWERS = [
 ];
 const FALLBACK_COMMENTS = ["その発想はなかったわ！", "破壊力がすごいな！", "シュールすぎて腹筋崩壊ｗ", "それは反則やろ（笑）", "AIの計算を超えてるわ"];
 
+// --- 環境変数 (安全な読み込み) ---
+// processオブジェクトが存在するか確認してからアクセスするヘルパー関数
+const getEnv = (key) => {
+  if (typeof process !== 'undefined' && process.env) {
+    return process.env[key];
+  }
+  return undefined;
+};
+
+// --- Firebase設定 ---
+const firebaseConfig = {
+  apiKey: getEnv("NEXT_PUBLIC_FIREBASE_API_KEY"),
+  authDomain: getEnv("NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN"),
+  projectId: getEnv("NEXT_PUBLIC_FIREBASE_PROJECT_ID"),
+  storageBucket: getEnv("NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET"),
+  messagingSenderId: getEnv("NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID"),
+  appId: getEnv("NEXT_PUBLIC_FIREBASE_APP_ID")
+};
+
 // --- Firebase初期化 ---
 let app, auth, db;
 try {
-  const conf = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : {};
-  // Check if config is valid
-  if (conf && conf.apiKey && !conf.apiKey.includes("process.env")) {
+  let conf = firebaseConfig;
+  
+  // Vercel等の環境変数がなく、Canvas環境の変数が有効な場合のフォールバック
+  if ((!conf.apiKey || conf.apiKey === "AIzaSy...") && typeof __firebase_config !== 'undefined') {
+      conf = JSON.parse(__firebase_config);
+  }
+
+  // 設定が有効であれば初期化
+  if (conf && conf.apiKey) {
     app = !getApps().length ? initializeApp(conf) : getApp();
     auth = getAuth(app);
     db = getFirestore(app);
   }
 } catch (e) { console.error("Firebase init error", e); }
 
+// 安全なApp IDの取得 (スラッシュを含むIDをサニタイズ)
+const getSafeAppId = () => {
+  if (typeof __app_id !== 'undefined' && __app_id) {
+    // Firestoreのパスセグメントエラーを防ぐため、スラッシュを置換
+    return __app_id.replace(/\//g, '_');
+  }
+  return 'default-app';
+};
+
 const getDocRef = (col, id) => {
   if (!db) return null;
-  // Use artifacts collection if app_id is available, otherwise root (fallback)
-  if (typeof __app_id !== 'undefined') {
-    return doc(db, 'artifacts', __app_id, 'public', 'data', col, id);
-  }
-  return doc(db, col, id);
+  const appId = getSafeAppId();
+  return doc(db, 'artifacts', appId, 'public', 'data', col, id);
 };
 
 // --- Utils ---
@@ -132,9 +164,15 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
   </div>
 );
 
-const Card = ({ text, isSelected, onClick, disabled }) => (
-  <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
-);
+// 修正: textがオブジェクトの場合のクラッシュ防止
+const Card = ({ text, isSelected, onClick, disabled }) => {
+  const displayText = (typeof text === 'string' || typeof text === 'number') ? text : "???";
+  return (
+    <button onClick={() => !disabled && onClick(displayText)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>
+      {displayText}
+    </button>
+  );
+};
 
 const RadarChart = ({ data, size = 120 }) => {
   const r = size / 2, c = size / 2, max = 5;
@@ -179,9 +217,9 @@ const HallOfFameModal = ({ onClose, data }) => {
                     <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">
                           {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
                         <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
-                        <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
-                        <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
-                        <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
+                        <p className="font-bold text-slate-700 text-sm mb-2">お題: {typeof item.topic === 'string' ? item.topic : '???'}</p>
+                        <p className="text-xl font-black text-indigo-700 mb-2">"{typeof item.answer === 'string' ? item.answer : '???'}"</p>
+                        <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {typeof item.comment === 'string' ? item.comment : '...'}</div>
                     </div>
                 )))}
         </div>
@@ -205,7 +243,18 @@ const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedbac
     </div>
     <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
     <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
-    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
+    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">
+      {typeof topic === 'string' ? topic.split('{placeholder}').map((part, i, arr) => (
+        <React.Fragment key={i}>
+          {part}
+          {i < arr.length - 1 && (
+            <span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">
+              {typeof answer === 'string' ? answer : (answer || '？？？')}
+            </span>
+          )}
+        </React.Fragment>
+      )) : "読み込みエラー"}
+    </p>
   </div>
 );
 
@@ -287,7 +336,7 @@ export default function AiOgiriApp() {
   const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, averageRadar: {} });
   const [hallOfFame, setHallOfFame] = useState([]);
   const [rankings, setRankings] = useState({});
-  const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
+  const [learned, setLearned] = useState({ topics: [], goodAnswers: [], cardPool: [] });
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
 
@@ -363,7 +412,7 @@ export default function AiOgiriApp() {
   };
   const resetLearnedData = () => {
     if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
-      const emptyData = { topics: [], answers: [], pool: [] };
+      const emptyData = { topics: [], goodAnswers: [], cardPool: [] };
       setLearned(emptyData);
       localStorage.removeItem('aiOgiriLearnedData');
       setTopicsList([...FALLBACK_TOPICS]);
@@ -442,7 +491,10 @@ export default function AiOgiriApp() {
   const callGemini = async (prompt) => {
       if (!isAiActive) return null;
       try {
-          const apiKey = ""; // Set by runtime environment
+          // Vercel環境などの環境変数を優先、なければCanvas環境用の空文字(自動注入)
+          const envKey = getEnv("GEMINI_API_KEY");
+          const apiKey = envKey || "";
+          
           const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { 
               method: 'POST', 
               headers: { 'Content-Type': 'application/json' }, 
@@ -460,11 +512,20 @@ export default function AiOgiriApp() {
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
   const fetchAiTopic = async () => { const ref = shuffleArray(learned.topics).slice(0,3).join("\n"); return (await callGemini(`大喜利のお題を1つ作成。条件:問いは一つ。回答は「名詞」。{placeholder}を文末付近に。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null; };
-  const fetchAiCards = async (count=10) => { const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:具体的,ジャンルバラバラ,既存回避。出力: {"answers": ["...", ...]}`); if(res?.answers) saveGeneratedCards(res.answers); return res?.answers || null; };
+  
+  // 修正: 取得したデータが配列であり、かつ文字列であることを確認するフィルタリングを追加
+  const fetchAiCards = async (count=10) => { 
+      const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:具体的,ジャンルバラバラ,既存回避。出力: {"answers": ["...", ...]}`); 
+      if(res?.answers && Array.isArray(res.answers)) {
+          const cleanAnswers = res.answers.filter(a => typeof a === 'string');
+          saveGeneratedCards(cleanAnswers); 
+          return cleanAnswers;
+      }
+      return null;
+  };
   const fetchAiJudgment = async (topic, answer, isManual) => { const p = isManual ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.20文字ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`; return await callGemini(p); };
 
   // --- Game Control ---
-  // 修正箇所: 新しい関数を追加
   const addCardsToDeck = (newCards) => {
     if (!newCards || newCards.length === 0) return;
     setCardDeck(prev => [...prev, ...newCards]);
@@ -477,13 +538,19 @@ export default function AiOgiriApp() {
       
       const fallback = FALLBACK_ANSWERS;
       let pool = [...fallback];
-      if (learned.pool) pool = [...pool, ...learned.pool];
+      // 修正: プールからデータを読み込む際にも文字列チェックを行う
+      if (learned.cardPool) {
+          const validPool = learned.cardPool.filter(c => typeof c === 'string');
+          pool = [...pool, ...validPool];
+      }
       const initialDeck = shuffleArray(pool).slice(0, 60);
       
       if (isAiActive) {
           fetchAiCards(10).then(res => {
               if (res) {
-                  setCardDeck(prev => [...prev, ...res]);
+                  // fetchAiCards内ですでにフィルタリングされているが念のため
+                  const cleanRes = res.filter(c => typeof c === 'string');
+                  setCardDeck(prev => [...prev, ...cleanRes]);
               }
           });
       }
@@ -702,7 +769,11 @@ export default function AiOgiriApp() {
     const currentHandSize = singlePlayerHand.length;
     let currentDeck = [...cardDeck];
     let pool = [...FALLBACK_ANSWERS];
-    if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
+    // 修正: learned.cardPool を読み込む際も文字列チェック
+    if (learned.cardPool?.length > 0) {
+        const validPool = learned.cardPool.filter(c => typeof c === 'string');
+        pool = [...pool, ...validPool];
+    }
     
     if (currentDeck.length < currentHandSize) {
         if (isAiActive) {
@@ -774,7 +845,6 @@ export default function AiOgiriApp() {
     } else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
 
-  // 修正箇所: Missing function was here. Added handleSingleSubmit
   const handleSingleSubmit = (text) => {
     submitAnswer(text);
   };
