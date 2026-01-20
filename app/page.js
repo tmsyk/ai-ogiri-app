@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.31";
+const APP_VERSION = "Ver 0.32";
 const UPDATE_LOGS = [
-  { version: "Ver 0.31", date: "2026/01/23", content: ["AIコメント表示の重複を修正", "山札システムの導入（カード重複防止）", "お題の質を改善", "通信中の表示を親切化"] },
-  { version: "Ver 0.30", date: "2026/01/22", content: ["手札交換ロジックの改善", "結果画面の誤操作防止", "AI評価フィードバック機能"] },
+  { version: "Ver 0.32", date: "2026/01/23", content: ["起動時のエラー(syncActiveCards)を修正", "ローディング画面にテキストを追加"] },
+  { version: "Ver 0.31", date: "2026/01/23", content: ["AIコメント表示の重複を修正", "山札システムの導入", "お題の質を改善"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -27,7 +27,7 @@ const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
 const HAND_SIZE = 6;
-const INITIAL_DECK_SIZE = 50; // 初期山札枚数を増量
+const INITIAL_DECK_SIZE = 50;
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
 
@@ -333,6 +333,20 @@ export default function AiOgiriApp() {
   const registerActiveCards = (cards) => {
     cards.forEach(card => activeCardsRef.current.add(card));
   };
+  const syncActiveCards = (hands, deck) => {
+    const next = new Set();
+    hands.flat().forEach(card => next.add(card));
+    deck.forEach(card => next.add(card));
+    activeCardsRef.current = next;
+  };
+  
+  // 修正: syncActiveCards が正しく呼び出されるようにする
+  const syncCardsWrapper = (hands, deck) => {
+      if (typeof syncActiveCards === 'function') {
+          syncActiveCards(hands, deck);
+      }
+  };
+
   const addCardsToDeck = (cards) => {
     const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
     if (uniqueCards.length === 0) return;
@@ -536,22 +550,9 @@ export default function AiOgiriApp() {
       } catch (e) { return null; }
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
-  const fetchAiTopic = async () => {
-    const ref = shuffleArray(learned.topics).slice(0, 3).join("\n");
-    return (await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null;
-  };
-  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
-    const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:短め(1-8文字中心),ジャンルバラバラ,定番〜変化球,擬音や語感の良い言葉も混ぜる,既存回避。出力: {"answers": ["...", ...]}`);
-    const uniqueAnswers = getUniqueCards(res?.answers, usedSet);
-    if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
-    return uniqueAnswers;
-  };
-  const fetchAiJudgment = async (topic, answer, isManual) => {
-    const p = isManual
-      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.8〜14文字の気の利いた一言ツッコミのみ(解説禁止) 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.8〜14文字の気の利いた一言ツッコミのみ(解説禁止) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
-    return await callGemini(p);
-  };
+  const fetchAiTopic = async () => { const ref = shuffleArray(learned.topics).slice(0,3).join("\n"); return (await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null; };
+  const fetchAiCards = async (count=10) => { const res = await callGemini(`大喜利の回答カード(名詞/短いフレーズ)を${count}個作成。条件:具体的,ジャンルバラバラ,既存回避。出力: {"answers": ["...", ...]}`); if(res?.answers) saveGeneratedCards(res.answers); return res?.answers || null; };
+  const fetchAiJudgment = async (topic, answer, isManual) => { const p = isManual ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.20文字ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`; return await callGemini(p); };
 
   const collectCards = async (count) => {
     const collected = [];
@@ -1057,7 +1058,13 @@ export default function AiOgiriApp() {
                     {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600">{answerCount}回</span>}
                 </div>
 
-                {gamePhase === 'drawing' && <div className="text-center py-20"><RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300"/></div>}
+                {gamePhase === 'drawing' && (
+                    <div className="text-center py-20">
+                        <RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300 mb-4"/>
+                        <p className="text-slate-500 font-bold">準備中...</p>
+                        <p className="text-xs text-slate-400 mt-2">AIがカードを生成しています...</p>
+                    </div>
+                )}
 
                 {gamePhase === 'master_topic' && (
                     <div className="bg-white p-6 rounded-2xl shadow-sm animate-in fade-in">
