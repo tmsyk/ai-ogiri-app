@@ -1,52 +1,46 @@
-import { NextResponse } from 'next/server';
+import { GoogleGenerativeAI } from "@google/generative-ai";
+import { NextResponse } from "next/server";
 
-// Vercelのタイムアウト制限を60秒（Hobbyプランの最大）に延長する設定
+// ★ここが重要：Vercelの関数実行時間を延ばす設定
+// Hobby(無料): 最大60秒まで設定可能（デフォルトは10秒）
+// Pro(有料): 最大300秒まで設定可能
 export const maxDuration = 60; 
-// キャッシュを無効化して常に新しいデータを取得する設定
+
+// キャッシュを無効化（常に新しい回答を得るため）
 export const dynamic = 'force-dynamic';
 
-export async function POST(request) {
-  const apiKey = process.env.GEMINI_API_KEY;
-  
-  if (!apiKey) {
-    return NextResponse.json({ error: 'API key is missing' }, { status: 500 });
-  }
-
-  const body = await request.json();
-  const { prompt, systemInstruction } = body;
-
+export async function POST(req) {
   try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          systemInstruction: { parts: [{ text: systemInstruction }] },
-          // 安全性設定：不適切なコンテンツをブロック
-          safetySettings: [
-            { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-            { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_LOW_AND_ABOVE" },
-            { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_LOW_AND_ABOVE" },
-            { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_LOW_AND_ABOVE" },
-          ],
-          generationConfig: { responseMimeType: "application/json" }
-        }),
-      }
-    );
+    const { prompt, systemInstruction } = await req.json();
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    if (!response.ok) {
-       // エラー詳細をログに出す
-       const errorText = await response.text();
-       console.error("Google API Error Details:", errorText);
-       throw new Error(`Google API Error: ${response.status}`);
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "GEMINI_API_KEY is not set" },
+        { status: 500 }
+      );
     }
 
-    const data = await response.json();
-    return NextResponse.json(data);
+    const genAI = new GoogleGenerativeAI(apiKey);
+    // 高速なFlashモデルを使用
+    const model = genAI.getGenerativeModel({ 
+      model: "gemini-2.5-flash-preview-09-2025",
+      systemInstruction: systemInstruction ? { parts: [{ text: systemInstruction }] } : undefined,
+    });
+
+    const result = await model.generateContent(prompt);
+    const response = await result.response;
+    const text = response.text();
+
+    return NextResponse.json({ 
+      candidates: [{ content: { parts: [{ text }] } }] 
+    });
+
   } catch (error) {
-    console.error("Server Error:", error);
-    return NextResponse.json({ error: 'Failed to fetch' }, { status: 500 });
+    console.error("Gemini API Error:", error);
+    return NextResponse.json(
+      { error: "Failed to fetch from Gemini", details: error.message },
+      { status: 500 }
+    );
   }
 }
