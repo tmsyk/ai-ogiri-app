@@ -1,22 +1,23 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
-import { 
-  RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, 
-  Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
-  Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
-  Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import {
+  RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw,
+  Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff,
+  Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown,
+  Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2,
+  VolumeX, PieChart, Activity, LogOut
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
-import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
+import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.21";
+const APP_VERSION = "Ver 0.23"; // バージョンアップ
 const UPDATE_LOGS = [
-  { version: "Ver 0.21", date: "2026/01/21", content: ["回答カード取得ロジックの修正（Firebase優先）", "APIエラー時の動作安定化"] },
-  { version: "Ver 0.20", date: "2026/01/21", content: ["効果音再生エラーの完全修正", "変数名の統一"] },
+  { version: "Ver 0.23", date: "2026/01/21", content: ["回答クリック時の動作エラーを修正", "カード追加処理の修正"] },
+  { version: "Ver 0.22", date: "2026/01/21", content: ["手札が表示されない不具合を修正", "ゲーム初期化処理の改善"] },
+  { version: "Ver 0.21", date: "2026/01/21", content: ["回答カード取得ロジックの修正", "APIエラー時の動作安定化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -24,9 +25,8 @@ const SURVIVAL_PASS_SCORE = 60;
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
-const TIME_LIMIT = 30;
-const WIN_SCORE_MULTI = 10;
 const MAX_REROLL = 3;
+const WIN_SCORE_MULTI = 10;
 
 const FALLBACK_TOPICS = [
   "冷蔵庫を開けたら、なぜか {placeholder} が冷やされていた。",
@@ -53,28 +53,26 @@ const FALLBACK_ANSWERS = [
 ];
 const FALLBACK_COMMENTS = ["その発想はなかったわ！", "破壊力がすごいな！", "シュールすぎて腹筋崩壊ｗ", "それは反則やろ（笑）", "AIの計算を超えてるわ"];
 
-// --- Firebase設定 ---
-const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY || "AIzaSy...",
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
-};
-
 // --- Firebase初期化 ---
 let app, auth, db;
 try {
-  const conf = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : firebaseConfig;
-  if (conf && conf.apiKey && conf.apiKey !== "AIzaSy..." && !conf.apiKey.includes("process.env")) {
-      app = !getApps().length ? initializeApp(conf) : getApp();
-      auth = getAuth(app);
-      db = getFirestore(app);
+  const conf = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : {};
+  // Check if config is valid
+  if (conf && conf.apiKey && !conf.apiKey.includes("process.env")) {
+    app = !getApps().length ? initializeApp(conf) : getApp();
+    auth = getAuth(app);
+    db = getFirestore(app);
   }
 } catch (e) { console.error("Firebase init error", e); }
 
-const getDocRef = (col, id) => db ? (typeof __app_id !== 'undefined' ? doc(db, 'artifacts', __app_id, 'public', 'data', col, id) : doc(db, col, id)) : null;
+const getDocRef = (col, id) => {
+  if (!db) return null;
+  // Use artifacts collection if app_id is available, otherwise root (fallback)
+  if (typeof __app_id !== 'undefined') {
+    return doc(db, 'artifacts', __app_id, 'public', 'data', col, id);
+  }
+  return doc(db, col, id);
+};
 
 // --- Utils ---
 const shuffleArray = (array) => {
@@ -85,6 +83,7 @@ const shuffleArray = (array) => {
   }
   return newArray;
 };
+
 const formatTime = (ms) => {
   if (!ms) return "--:--";
   const minutes = Math.floor(ms / 60000);
@@ -93,17 +92,20 @@ const formatTime = (ms) => {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
 
-// --- Web Audio API Helper ---
-const playOscillatorSound = (ctx, type, volume) => {
-  if (!ctx || volume <= 0) return;
+const playSynthSound = (type, volume) => {
+  if (typeof window === 'undefined' || volume <= 0) return;
   try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    // Note: AudioContext usually needs to be resumed on user gesture.
+    // We create a new one here for simplicity, but a persistent one is better.
+    const ctx = new AudioContext();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
     const now = ctx.currentTime;
     const vol = volume * 0.3;
-
     if (type === 'tap') {
       osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(vol, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1);
     } else if (type === 'decision') {
@@ -115,7 +117,7 @@ const playOscillatorSound = (ctx, type, volume) => {
     } else if (type === 'timeup') {
       osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
     }
-  } catch (e) { console.error(e); }
+  } catch (e) {}
 };
 
 // --- Sub Components ---
@@ -175,7 +177,7 @@ const HallOfFameModal = ({ onClose, data }) => {
         <div className="space-y-4">
             {(!sortedData || sortedData.length === 0) ? ( <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p> ) : ( sortedData.map((item, i) => (
                     <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">
-                         {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
+                          {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
                         <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
                         <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
                         <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
@@ -204,15 +206,6 @@ const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedbac
     <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
     <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
     <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
-  </div>
-);
-
-const RankingList = ({ mode, data, unit }) => (
-  <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
-    <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
-    {data && data.length > 0 ? (
-      <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? formatTime(rank.value) : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
-    ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
   </div>
 );
 
@@ -310,7 +303,7 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          playOscillatorSound(ctx, type, volume); // 修正箇所
+          playSynthSound(type, volume);
       }
   };
 
@@ -320,7 +313,6 @@ export default function AiOgiriApp() {
     }
   };
 
-  // --- Logic Helpers ---
   const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
   const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
   const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
@@ -409,7 +401,17 @@ export default function AiOgiriApp() {
     const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
     const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
     const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
-    if (auth) { signInAnonymously(auth).catch(()=>{}); onAuthStateChanged(auth, u => setCurrentUser(u)); }
+
+    const initAuth = async () => {
+        if (!auth) return;
+        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+          try { await signInWithCustomToken(auth, __initial_auth_token); } catch(e) { await signInAnonymously(auth); }
+        } else {
+          try { await signInAnonymously(auth); } catch(e) {}
+        }
+    };
+    initAuth();
+    if (auth) onAuthStateChanged(auth, u => setCurrentUser(u));
   }, []);
 
   useEffect(() => {
@@ -440,7 +442,15 @@ export default function AiOgiriApp() {
   const callGemini = async (prompt) => {
       if (!isAiActive) return null;
       try {
-          const res = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+          const apiKey = ""; // Set by runtime environment
+          const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-09-2025:generateContent?key=${apiKey}`, { 
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ 
+                  contents: [{ parts: [{ text: prompt }] }],
+                  generationConfig: { responseMimeType: "application/json" }
+              }) 
+          });
           if (!res.ok) throw new Error();
           const data = await res.json();
           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -454,6 +464,12 @@ export default function AiOgiriApp() {
   const fetchAiJudgment = async (topic, answer, isManual) => { const p = isManual ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.20文字ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.ツッコミ 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`; return await callGemini(p); };
 
   // --- Game Control ---
+  // 修正箇所: 新しい関数を追加
+  const addCardsToDeck = (newCards) => {
+    if (!newCards || newCards.length === 0) return;
+    setCardDeck(prev => [...prev, ...newCards]);
+  };
+
   const initGame = async () => {
       playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
       setGameRadars([]); 
@@ -461,16 +477,15 @@ export default function AiOgiriApp() {
       
       const fallback = FALLBACK_ANSWERS;
       let pool = [...fallback];
-      if (learned.cardPool) pool = [...pool, ...learned.cardPool];
+      if (learned.pool) pool = [...pool, ...learned.pool];
       const initialDeck = shuffleArray(pool).slice(0, 60);
       
-      // API呼び出しはバックグラウンドで行い、成功したらstateを更新する
       if (isAiActive) {
           fetchAiCards(10).then(res => {
               if (res) {
                   setCardDeck(prev => [...prev, ...res]);
               }
-          }).catch(e => console.log("Background fetch failed", e));
+          });
       }
       setCardDeck(initialDeck);
 
@@ -484,6 +499,9 @@ export default function AiOgiriApp() {
       };
 
       const { h: pHand, rest: d1 } = draw(initialDeck, 7);
+      
+      setSinglePlayerHand(pHand);
+
       if (gameConfig.mode === 'single') {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
           setMasterIndex(0);
@@ -519,7 +537,6 @@ export default function AiOgiriApp() {
       if (isGeneratingTopic) return;
       setIsGeneratingTopic(true);
       
-      // APIエラー時でも必ずフォールバックが機能するようにtry-catch
       let t = "";
       try {
           const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
@@ -688,7 +705,11 @@ export default function AiOgiriApp() {
     if (learned.cardPool?.length > 0) pool = [...pool, ...learned.cardPool];
     
     if (currentDeck.length < currentHandSize) {
-        currentDeck = [...currentDeck, ...shuffleArray(pool)];
+        if (isAiActive) {
+            const newCards = await fetchAiCards(8);
+            if (newCards) { addCardsToDeck(newCards); currentDeck = [...currentDeck, ...newCards]; }
+        }
+        if (currentDeck.length < currentHandSize) currentDeck = [...currentDeck, ...shuffleArray(pool)];
     }
     const draw = (d, n) => {
           const h = []; const rest = [...d];
@@ -707,6 +728,23 @@ export default function AiOgiriApp() {
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     if (isAiActive) fetchAiCards(10).then(aiCards => { if (aiCards) addCardsToDeck(aiCards); });
+  };
+
+  const generateAiTopic = async () => {
+    playSound('tap');
+    if (isGeneratingTopic) return;
+    if (topicCreateRerollCount >= MAX_REROLL) {
+        alert("AI提案は1ターンにつき3回までです！");
+        return;
+    }
+    setIsGeneratingTopic(true);
+    let topic = await fetchAiTopic();
+    if (!topic) topic = topicsList[Math.floor(Math.random() * topicsList.length)];
+    const displayTopic = topic.replace(/\{placeholder\}/g, "___");
+    setManualTopicInput(displayTopic);
+    setLastAiGeneratedTopic(displayTopic);
+    setTopicCreateRerollCount(prev => prev + 1);
+    setIsGeneratingTopic(false);
   };
 
   const confirmTopicAI = async () => {
@@ -734,6 +772,11 @@ export default function AiOgiriApp() {
         setGamePhase('answer_input');
         if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     } else prepareNextSubmitter(masterIndex, masterIndex, players);
+  };
+
+  // 修正箇所: Missing function was here. Added handleSingleSubmit
+  const handleSingleSubmit = (text) => {
+    submitAnswer(text);
   };
 
   const handleSingleSubmitManual = async (text) => {
@@ -804,21 +847,15 @@ export default function AiOgiriApp() {
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
   };
 
-  const prepareNextSubmitter = (current, master, currentPlayers) => {
-    const next = (current + 1) % currentPlayers.length;
-    if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); }
-    else { setTurnPlayerIndex(next); setGamePhase('turn_change'); }
-  };
-
   // --- Render (View) ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
        <header className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-30">
-          <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
-          <div className="flex gap-2">
-              <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
-              {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
-          </div>
+         <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
+         <div className="flex gap-2">
+             <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
+             {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
+         </div>
        </header>
 
        <main className="max-w-2xl mx-auto p-4">
