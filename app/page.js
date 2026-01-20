@@ -6,18 +6,17 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.17";
+const APP_VERSION = "Ver 0.18";
 const UPDATE_LOGS = [
+  { version: "Ver 0.18", date: "2026/01/21", content: ["変数名不一致による進行不能バグを修正", "APIエラー時のフォールバック処理を強化"] },
   { version: "Ver 0.17", date: "2026/01/21", content: ["効果音機能の関数名エラーを修正", "ゲーム開始時の動作安定化"] },
-  { version: "Ver 0.16", date: "2026/01/21", content: ["ゲーム開始時の進行不能バグを修正", "シングルプレイ時の山札処理を修正"] },
-  { version: "Ver 0.15", date: "2026/01/21", content: ["重複コードの削除", "変数名の統一"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -94,18 +93,19 @@ const formatTime = (ms) => {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
 
-// --- Web Audio API Helper (修正済み) ---
-// AudioContextを受け取って音を鳴らす関数
-const createSynth = (ctx, type, volume) => {
-  if (!ctx || volume <= 0) return;
+// --- Web Audio API Helper ---
+const playSynthSound = (type, volume) => {
+  if (typeof window === 'undefined' || volume <= 0) return;
   try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    const ctx = new AudioContext();
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.connect(gain);
     gain.connect(ctx.destination);
     const now = ctx.currentTime;
     const vol = volume * 0.3;
-
     if (type === 'tap') {
       osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(vol, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1);
     } else if (type === 'decision') {
@@ -117,9 +117,7 @@ const createSynth = (ctx, type, volume) => {
     } else if (type === 'timeup') {
       osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
     }
-  } catch (e) {
-    console.error(e);
-  }
+  } catch (e) {}
 };
 
 // --- Sub Components ---
@@ -158,7 +156,7 @@ const RadarChart = ({ data, size = 120 }) => {
 const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, resetLearnedData }) => (
   <ModalBase onClose={onClose} title="設定" icon={Settings}>
       <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
-      <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap'); }} className="w-full accent-indigo-600" /></div>
+      <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" /></div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label><input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" /></div>
       <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
   </ModalBase>
@@ -314,7 +312,7 @@ export default function AiOgiriApp() {
       const ctx = audioCtx.current;
       if (ctx) {
           if (ctx.state === 'suspended') ctx.resume();
-          createSynth(ctx, type, volume);
+          playSynthSound(type, volume);
       }
   };
 
@@ -324,28 +322,11 @@ export default function AiOgiriApp() {
     }
   };
 
-  // --- Logic Helpers ---
   const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
   const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
   const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
 
-  const updateUserStats = (score, radar) => {
-      setUserStats(prev => {
-          const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
-          const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
-          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
-          const newRadar = {
-              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
-              context: prevRadar.context * (1 - alpha) + r.context * alpha,
-              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
-              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
-              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
-          };
-          const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
-          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); return newData;
-      });
-  };
-
+  // --- Logic Helpers ---
   const saveGeneratedCards = async (newCards) => {
     if (!newCards || newCards.length === 0) return;
     const updatedPool = [...(learned.cardPool || []), ...newCards].slice(-100); 
@@ -394,6 +375,23 @@ export default function AiOgiriApp() {
         const ref = getDocRef('shared_db', 'rankings');
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
+  };
+
+  const updateUserStats = (score, radar) => {
+      setUserStats(prev => {
+          const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
+          const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          const newRadar = {
+              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
+              context: prevRadar.context * (1 - alpha) + r.context * alpha,
+              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
+              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
+              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
+          };
+          const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
+          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); return newData;
+      });
   };
 
   const getAverageRadar = () => {
@@ -614,11 +612,11 @@ export default function AiOgiriApp() {
   };
 
   const rerollHand = () => {
-      playSound('card'); if(handRerolled) return; setIsTimerRunning(false);
+      playSound('card'); if(hasHandRerolled) return; setIsTimerRunning(false);
       const needed = 7; let newDeck = [...cardDeck];
       if (newDeck.length < needed) newDeck = [...newDeck, ...shuffleArray(FALLBACK_ANSWERS)];
       const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
-      setSinglePlayerHand(newHand); setCardDeck(newDeck); setHandRerolled(true);
+      setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       if (isAiActive) fetchAiCards(5).then(c => { if(c) setCardDeck(p => [...p, ...c]); });
   };
@@ -690,7 +688,7 @@ export default function AiOgiriApp() {
     setSinglePlayerHand(newHand);
     setCardDeck(remainingDeck);
     
-    setHandRerolled(true);
+    setHasHandRerolled(true);
     setIsRerollingHand(false);
     
     if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
