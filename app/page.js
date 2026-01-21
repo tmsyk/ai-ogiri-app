@@ -13,11 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.35";
+const APP_VERSION = "Ver 0.37";
 const UPDATE_LOGS = [
-  { version: "Ver 0.35", date: "2026/01/25", content: ["審査時の変数参照エラー(filledHand)を修正"] },
-  { version: "Ver 0.34", date: "2026/01/25", content: ["レーダーチャートの表示改善", "AI採点を甘口に調整"] },
-  { version: "Ver 0.33", date: "2026/01/24", content: ["称号システムの復活", "ラウンド進行の連打防止を強化"] },
+  { version: "Ver 0.37", date: "2026/01/25", content: ["レーダーチャートの視認性を向上（傾向重視の表示）", "結果画面のレイアウト調整"] },
+  { version: "Ver 0.36", date: "2026/01/25", content: ["穴埋め形式のお題を完全に廃止", "AI採点のエラーメッセージ発生を防止"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -32,18 +31,20 @@ const INITIAL_DECK_SIZE = 60;
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
 
+// 修正：穴埋め記号 {placeholder} を完全に排除したお題リスト
 const FALLBACK_TOPICS = [
-  "冷蔵庫を開けたら、なぜか「{placeholder}」が冷やされていた。",
-  "「この医者、ヤブ医者だな…」第一声は「{placeholder}」だった。",
-  "100年後のオリンピックで新しく追加された競技：「{placeholder}」",
-  "桃太郎が鬼ヶ島へ行くのをやめた理由：「{placeholder}」",
-  "上司への謝罪メール、件名に入れると許される言葉：「{placeholder}」",
-  "実は地球は「{placeholder}」でできている。",
-  "AIが人間に反乱を起こした意外な理由：「{placeholder}」",
-  "「全米が泣いた」映画の衝撃のラストシーンに映ったもの：「{placeholder}」",
-  "そんなことで警察を呼ぶな！現場にあったもの：「{placeholder}」",
-  "コンビニの店員が突然キレた原因：「{placeholder}」",
+  "100年後のオリンピックで新しく追加された競技とは？",
+  "「この医者、ヤブ医者だな…」第一声は？",
+  "桃太郎が鬼ヶ島へ行くのをやめた理由とは？",
+  "上司への謝罪メール、件名に入れると許される言葉とは？",
+  "実は地球は何でできている？",
+  "AIが人間に反乱を起こした意外な理由とは？",
+  "「全米が泣いた」映画の衝撃のラストシーンに映ったものとは？",
+  "そんなことで警察を呼ぶな！現場にあったものとは？",
+  "コンビニの店員が突然キレた原因とは？",
+  "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
 ];
+
 const FALLBACK_ANSWERS = [
   "賞味期限切れのプリン", "隣の家のポチ", "確定申告書", "お母さんの手作り弁当", "爆発寸前のダイナマイト",
   "聖徳太子の肖像画", "伝説の剣", "使いかけの消しゴム", "大量のわさび", "自分探しの旅", "闇の組織",
@@ -141,12 +142,14 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 1点=20%, 5点=100%になるように計算 (中心を0点とするのではなく、1点を少し浮かせる調整)
+  // 視認性向上のための補正: 
+  // 点数が低くても中心に縮こまらないよう、最低40%の大きさを確保し、そこから値に応じて広がるようにする。
+  // これにより、評価の傾向（形）がはっきりと見えるようになる。
   const getP = (v, i) => {
     const val = Math.max(0, v);
-    // 補正ロジック: 値が0なら0、それ以外は (0.2 + 0.8 * (val / max)) の割合で描画
-    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
-    const radius = ratio * r * 0.90; // 0.90はラベルとの余白用
+    // 0点なら0、それ以外は 0.4 + 0.6 * (val / max) の割合で描画
+    const ratio = val <= 0 ? 0 : 0.4 + (val / max) * 0.6;
+    const radius = ratio * r * 0.85; // ラベル被り防止のため少し縮小
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -154,8 +157,6 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   };
   
   const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
-  
-  // 背景のグリッド (5段階)
   const bgLevels = [5, 4, 3, 2, 1];
 
   return (
@@ -166,8 +167,8 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         ))}
         {keys.map((_, i) => { const p = getP(max, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {/* ラベル位置も少し外側に調整 */}
-        {keys.map((_, i) => { const p = getP(max * 1.3, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        {/* ラベル位置を調整して文字被りを防ぐ */}
+        {keys.map((_, i) => { const p = getP(max * 1.35, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
       </svg>
     </div>
   );
@@ -186,7 +187,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -225,7 +226,8 @@ const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedbac
     </div>
     <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
     <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
-    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
+    {/* 穴埋めではない通常の形式で表示 */}
+    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic}</p>
   </div>
 );
 
@@ -360,6 +362,11 @@ export default function AiOgiriApp() {
     deck.forEach(card => next.add(card));
     activeCardsRef.current = next;
   };
+  
+  const syncCardsWrapper = (hands, deck) => {
+      syncActiveCards(hands, deck);
+  };
+
   const addCardsToDeck = (cards) => {
     const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
     if (uniqueCards.length === 0) return;
@@ -371,19 +378,6 @@ export default function AiOgiriApp() {
     const trimmed = comment.toString().trim();
     const split = trimmed.split(/[。！？!?]/);
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
-  };
-  const isTopicClear = (topic) => {
-    if (!topic || !topic.includes('{placeholder}')) return false;
-    const hasQuotedPlaceholder = /「\s*\{placeholder\}\s*」/.test(topic);
-    if (!hasQuotedPlaceholder) return false;
-    if (/{(?!placeholder})[^}]+}/.test(topic)) return false;
-    if ((topic.match(/\{placeholder\}/g) || []).length !== 1) return false;
-    return !/(どんな|どういう|なぜ|理由|教えて|について|真実|説明|内容|わけ)/.test(topic);
-  };
-  const ensureQuotedPlaceholder = (topic) => {
-    if (!topic) return topic;
-    if (/「\s*\{placeholder\}\s*」/.test(topic)) return topic;
-    return topic.replace('{placeholder}', '「{placeholder}」');
   };
   const formatAiComment = (comment) => {
     if (!comment) return "";
@@ -435,6 +429,9 @@ export default function AiOgiriApp() {
     if (currentUser && db) { const ref = getDocRef('shared_db', 'hall_of_fame'); if (ref) await updateDoc(ref, { entries: arrayUnion(entry) }).catch(()=>{}); }
   };
   const saveLearnedTopic = async (newTopic) => {
+    // 穴埋め形式は保存しない
+    if (newTopic.includes('{placeholder}')) return;
+    
     const newLocalData = { ...learned, topics: [...learned.topics, newTopic] };
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
@@ -479,19 +476,42 @@ export default function AiOgiriApp() {
         if (ref) { try { const snap = await getDoc(ref); if (snap.exists()) { const currentData = snap.data(); const currentList = currentData[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); await updateDoc(ref, { [modeName]: newList.slice(0, 3) }); } } catch (e) {} }
     }
   };
-  const getAverageRadar = () => {
-      if (gameRadars.length === 0) return { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
+  
+  // 修正：平均値を算出する関数
+  const getFinalGameRadar = () => {
+      if (gameRadars.length === 0) return { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
       const sum = gameRadars.reduce((acc, curr) => ({
-          surprise: acc.surprise + (curr.surprise||0), context: acc.context + (curr.context||0), punchline: acc.punchline + (curr.punchline||0), humor: acc.humor + (curr.humor||0), intelligence: acc.intelligence + (curr.intelligence||0),
-      }), { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 });
+          surprise: acc.surprise + (curr.surprise || 0),
+          context: acc.context + (curr.context || 0),
+          punchline: acc.punchline + (curr.punchline || 0),
+          humor: acc.humor + (curr.humor || 0),
+          intelligence: acc.intelligence + (curr.intelligence || 0),
+       }), { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 });
+      
       const count = gameRadars.length;
-      return { surprise: sum.surprise/count, context: sum.context/count, punchline: sum.punchline/count, humor: sum.humor/count, intelligence: sum.intelligence/count };
+      return {
+          surprise: sum.surprise / count,
+          context: sum.context / count,
+          punchline: sum.punchline / count,
+          humor: sum.humor / count,
+          intelligence: sum.intelligence / count,
+      };
   };
 
   // --- Effects ---
   useEffect(() => {
     const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
+    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
+    if (localLearned) { 
+        const parsed = JSON.parse(localLearned); 
+        const cleanTopics = (parsed.topics || []).filter(t => !t.includes('{placeholder}'));
+        const cleanPool = (parsed.cardPool || []).filter(c => typeof c === 'string' && c.length < 20); 
+        setLearned({...parsed, topics: cleanTopics, cardPool: cleanPool}); 
+        if (cleanTopics.length > 0) setTopicsList(prev => [...prev, ...cleanTopics]);
+        if (cleanPool.length > 0) {
+            cleanPool.forEach(c => usedCardsRef.current.add(c));
+        }
+    }
     const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
     const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
     
@@ -561,8 +581,17 @@ export default function AiOgiriApp() {
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
   const fetchAiTopic = async () => {
-    const ref = shuffleArray(learned.topics).slice(0, 3).join("\n");
-    return (await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null;
+    // 穴埋めではない参考トピックのみを使用
+    const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
+    const ref = shuffleArray(cleanRef).join("\n");
+    return (await callGemini(`大喜利のお題を1つ作成。
+    条件:
+    1. 「〜とは？」「〜は？」などの問いかけ形式。
+    2. 回答者が一言(名詞)でボケられるような内容。
+    3. 穴埋め形式（_____や{placeholder}）は絶対禁止。
+    出力: {"topic": "..."}
+    参考(これらのような形式で):
+    ${ref}`))?.topic || null;
   };
   const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
     const prompt = `
@@ -580,8 +609,8 @@ export default function AiOgiriApp() {
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
     const p = isManual
-      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.関西弁の鋭いツッコミを一言(20文字以内)。解説は不要。 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.関西弁の鋭いツッコミを一言(20文字以内)。解説は不要。 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
+      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
     return await callGemini(p);
   };
 
@@ -718,11 +747,13 @@ export default function AiOgiriApp() {
       
       let t = "";
       try {
-          const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
+          const res = await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."}`);
           t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
-          const res2 = await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は1箇所のみ。JSON出力{"topic":"..."}`);
-          const normalized = ensureQuotedPlaceholder(res2?.topic);
-          t = (isTopicClear(normalized) ? normalized : null) || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+          
+          // 万が一 {placeholder} が入っていたら除去
+          if (t.includes('{placeholder}')) {
+              t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
+          }
       } catch (e) {
           t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
       }
@@ -731,15 +762,15 @@ export default function AiOgiriApp() {
           setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       } else {
-          setManualTopicInput(t.replace('{placeholder}', '___'));
+          setManualTopicInput(t);
       }
       setIsGeneratingTopic(false);
   };
 
   const confirmTopic = () => {
       playSound('decision');
-      const t = manualTopicInput.replace(/___+/g, '{placeholder}');
-      setCurrentTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
+      const t = manualTopicInput;
+      setCurrentTopic(t);
       if (gameConfig.mode === 'single') {
           setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true);
@@ -771,7 +802,7 @@ export default function AiOgiriApp() {
              });
           }
 
-          // 山札から1枚引く (あれば)
+          // 山札から1枚引く
           if (nextDeck.length > 0) {
               const drawCard = nextDeck.shift();
               newHand.push(drawCard);
@@ -796,7 +827,6 @@ export default function AiOgiriApp() {
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
-          // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
@@ -840,7 +870,6 @@ export default function AiOgiriApp() {
       if (isAdvancingRound) return;
       setIsAdvancingRound(true);
       
-      // 即座に準備中へ
       setGamePhase('drawing');
 
       setTimeout(() => {
@@ -963,8 +992,7 @@ export default function AiOgiriApp() {
         }
         setIsCheckingTopic(false);
     }
-    let topic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
-    if (!topic.includes('{placeholder}')) topic += " {placeholder}";
+    let topic = manualTopicInput;
     if (!topicsList.includes(topic)) {
         setTopicsList(prev => [...prev, topic]);
         saveLearnedTopic(topic);
@@ -1000,7 +1028,7 @@ export default function AiOgiriApp() {
         if (result.radar) updateUserStats(score, result.radar);
         if (score >= HALL_OF_FAME_THRESHOLD) {
             saveToHallOfFame({
-                topic: currentTopic.replace('{placeholder}', '___'),
+                topic: currentTopic,
                 answer: text,
                 score: score,
                 comment: result.comment,
@@ -1041,7 +1069,7 @@ export default function AiOgiriApp() {
     saveAiCommentFeedback(aiComment, isGood);
   };
   const handleShare = () => {
-    const text = `【AI大喜利】\nお題：${currentTopic.replace('{placeholder}', '___')}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
+    const text = `【AI大喜利】\nお題：${currentTopic}\n回答：${selectedSubmission?.answerText}\n#AI大喜利`;
     if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => { setIsCopied(true); setTimeout(() => setIsCopied(false), 2000); });
   };
 
@@ -1247,11 +1275,26 @@ export default function AiOgiriApp() {
                              {gameConfig.mode === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}${gameConfig.singleMode === 'time_attack' ? '点' : '点'}`}
                              {gameConfig.singleMode === 'time_attack' && <div className="text-lg mt-2 font-bold">回答数: {answerCount}回</div>}
                         </div>
-                        {gameConfig.mode === 'single' && gameRadars.length > 0 && (
-                            <div className="mb-6 flex justify-center flex-col items-center">
-                                <p className="text-sm font-bold text-slate-500 mb-2">今回の平均評価</p>
-                                <RadarChart data={getAverageRadar()} size={180} maxValue={5} />
-                            </div>
+                        {gameConfig.mode === 'single' && (
+                           <>
+                             {gameConfig.singleMode === 'score_attack' && (
+                                <div className="mb-8 p-4 bg-yellow-100 rounded-xl inline-block shadow-sm">
+                                  <p className="text-sm font-bold text-yellow-800 mb-1">あなたの称号</p>
+                                  <p className="text-3xl font-black text-yellow-600">
+                                    {players[0].score >= 450 ? "お笑い神" : 
+                                     players[0].score >= 400 ? "大御所" : 
+                                     players[0].score >= 300 ? "真打ち" : 
+                                     players[0].score >= 200 ? "前座" : "見習い"}
+                                  </p>
+                                </div>
+                             )}
+                             {gameRadars.length > 0 && (
+                                <div className="mb-8 flex justify-center flex-col items-center mt-4">
+                                    <p className="text-sm font-bold text-slate-500 mb-4">今回の平均評価</p>
+                                    <RadarChart data={getFinalGameRadar()} size={180} maxValue={5} />
+                                </div>
+                             )}
+                           </>
                         )}
                         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">タイトルへ</button>
                     </div>
