@@ -6,18 +6,18 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity 
+  VolumeX, PieChart, Activity, LogOut 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.42";
+const APP_VERSION = "Ver 0.43";
 const UPDATE_LOGS = [
+  { version: "Ver 0.43", date: "2026/01/25", content: ["スコア計算をレーダーチャート評価連動に変更", "グラフ表示位置のレイアウト調整"] },
   { version: "Ver 0.42", date: "2026/01/25", content: ["AI評価項目とレーダーチャートの整合性を修正", "MyData画面の表示バグ修正"] },
   { version: "Ver 0.41", date: "2026/01/25", content: ["マイデータのグラフ基準を「平均値」に統一"] },
-  { version: "Ver 0.40", date: "2026/01/25", content: ["レーダーチャートを大きく見やすく調整", "採点基準を甘口（手札考慮）に変更"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -139,16 +139,20 @@ const Card = ({ text, isSelected, onClick, disabled }) => (
 );
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
-  const r = size / 2, c = size / 2, max = maxValue;
+  const c = size / 2;
+  // 文字被りを防ぐため、半径を少し小さく設定
+  const r = (size / 2) * 0.75;
+  const max = maxValue;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 視認性向上のための補正
+  // 視認性向上のための補正: 
+  // 点数が低くても中心に縮こまらないよう、最低50%の大きさを確保
   const getP = (v, i) => {
     const val = Math.max(0, v);
     // 0点は中心。それ以外は 0.5 + 0.5 * (val / max) の割合で描画
     const ratio = val <= 0 ? 0 : 0.5 + (val / max) * 0.5;
-    const radius = ratio * r * 0.90; 
+    const radius = ratio * r; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -161,22 +165,25 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
+        {/* 背景グリッド */}
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
              // グリッドは線形に描画
-             const radius = (l / 5) * r * 0.90;
+             const radius = (l / 5) * r;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
+        {/* 軸線 */}
         {keys.map((_, i) => { 
-           const radius = r * 0.90;
+           const radius = r;
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
+        {/* ラベル位置 */}
         {keys.map((_, i) => { 
-             const radius = r * 0.90 * 1.35; 
+             const radius = r * 1.35; 
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
              const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
@@ -215,7 +222,7 @@ const MyDataModal = ({ stats, onClose, userName }) => {
     <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
         <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
         <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析（平均）</p>{stats.playCount > 0 ? ( <RadarChart data={getTotalAverage()} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-10"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析（平均）</p>{stats.playCount > 0 ? ( <RadarChart data={getTotalAverage()} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
     </ModalBase>
   );
 };
@@ -658,7 +665,6 @@ export default function AiOgiriApp() {
     return uniqueAnswers;
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
-    const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を1-5で評価";
     const p = isManual
       ? `あなたはノリの良いお笑い審査員です。以下のお題と回答に対し、点数（0-100）と、面白いツッコミ（関西弁推奨）を返してください。
 お題: ${topic}
@@ -668,10 +674,11 @@ export default function AiOgiriApp() {
 1. たとえ回答が短かったり意味不明でも、AIのエラーメッセージのような「評価できません」は絶対に禁止。無理やりこじつけて面白おかしくツッコんでください。
 2. 点数は甘めにつけてください（基本60点以上）。
 3. ツッコミは15文字程度の短い一言で。
-4. ${radarDesc}
+4. 5段階評価（1-5）も行ってください。
+5. レーダーチャートの値を使って総合得点を算出するため、5段階評価は必ず出力してください。
 
 出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価（1-5） 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
     return await callGemini(p);
   };
 
@@ -886,7 +893,18 @@ export default function AiOgiriApp() {
       try {
         if (isAiActive) {
             const res = await fetchAiJudgment(currentTopic, text, isManual);
-            if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+            if (res) {
+                // レーダーチャートの合計値からスコアを算出（各5点満点×5項目＝25点満点 → ×4で100点満点）
+                const totalRadarScore = 
+                    (res.radar.surprise || 0) + 
+                    (res.radar.context || 0) + 
+                    (res.radar.punchline || 0) + 
+                    (res.radar.humor || 0) + 
+                    (res.radar.intelligence || 0);
+                score = totalRadarScore * 4;
+                comment = res.comment; 
+                radar = res.radar; 
+            }
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
@@ -1069,11 +1087,6 @@ export default function AiOgiriApp() {
     } else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
 
-  const handleSingleSubmitManual = async (text) => {
-    // 自由回答用だが、submitAnswerに統合するためラッパーとして機能
-    submitAnswer(text, true);
-  };
-
   const handleTopicFeedback = (isGood) => {
     playSound('tap');
     setTopicFeedback(isGood ? 'good' : 'bad');
@@ -1216,7 +1229,7 @@ export default function AiOgiriApp() {
                             <div className="flex gap-2">
                                 <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
                                 <button onClick={() => {
-                                    if(gameConfig.mode==='single') handleSingleSubmitManual(manualAnswerInput);
+                                    if(gameConfig.mode==='single') submitAnswer(manualAnswerInput, true);
                                     else handleMultiSubmit(manualAnswerInput);
                                 }} disabled={!manualAnswerInput.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
                             </div>
@@ -1311,8 +1324,8 @@ export default function AiOgiriApp() {
                                 </div>
                              )}
                              {gameRadars.length > 0 && (
-                                <div className="mb-8 flex justify-center flex-col items-center mt-4">
-                                    <p className="text-sm font-bold text-slate-500 mb-4">今回の平均評価</p>
+                                <div className="mb-8 flex justify-center flex-col items-center mt-10">
+                                    <p className="text-sm font-bold text-slate-500 mb-6">今回の平均評価</p>
                                     <RadarChart data={getFinalGameRadar()} size={180} maxValue={5} />
                                 </div>
                              )}
