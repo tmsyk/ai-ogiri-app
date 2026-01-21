@@ -6,15 +6,16 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.39";
+const APP_VERSION = "Ver 0.40";
 const UPDATE_LOGS = [
+  { version: "Ver 0.40", date: "2026/01/25", content: ["レーダーチャートを大きく見やすく調整", "採点基準を甘口（手札考慮）に変更"] },
   { version: "Ver 0.39", date: "2026/01/25", content: ["審査中に止まるバグ(newHand)を修正", "AI通信のタイムアウト処理(15秒)を追加"] },
   { version: "Ver 0.38", date: "2026/01/25", content: ["自由回答が表示されない不具合を修正", "レーダーチャートの表示ロジックを改良"] },
 ];
@@ -143,28 +144,24 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 背景グリッド用の座標計算（0～5を均等に）
-  const getGridP = (v, i) => {
-    const radius = (v / 5) * r * 0.90; 
-    return { 
-      x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
-      y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
-    };
-  };
-
-  // データ描画用の座標計算（補正あり：大きく見せる）
-  const getDataP = (v, i) => {
+  // 視認性向上のための補正: 
+  // 点数が低くても中心に縮こまらないよう、最低50%の大きさを確保し、そこから値に応じて広がるようにする。
+  // これにより、評価の傾向（形）がはっきりと見えるようになる。
+  const getP = (v, i) => {
     const val = Math.max(0, v);
-    // 0点は中心。それ以外は、半径の40%～100%の範囲にマッピングして大きく見せる
-    const ratio = val <= 0 ? 0 : 0.4 + (val / maxValue) * 0.6;
-    const radius = ratio * r * 0.90;
+    // 0点は中心。それ以外は 0.5 + 0.5 * (val / max) の割合で描画
+    // これにより、1点(0.2)でも 0.5 + 0.1 = 0.6 (60%) の位置に来るため、形がはっきりする。
+    const ratio = val <= 0 ? 0 : 0.5 + (val / max) * 0.5;
+    const radius = ratio * r * 0.90; // 0.90はラベルとの余白用
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
     };
   };
   
-  const points = keys.map((k, i) => getDataP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
+  const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
+  
+  // 背景のグリッド (5段階)
   const bgLevels = [5, 4, 3, 2, 1];
 
   return (
@@ -172,16 +169,30 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
       <svg width={size} height={size} className="overflow-visible">
         {/* 背景グリッド */}
         {bgLevels.map(l => (
-          <polygon key={l} points={keys.map((_, i) => getGridP(l, i).x + "," + getGridP(l, i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
+          <polygon key={l} points={keys.map((_, i) => {
+             // グリッドは線形に描画 (0, 0.2, 0.4, 0.6, 0.8, 1.0)
+             const radius = (l / 5) * r * 0.90;
+             return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
+          }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {/* 軸線 */}
-        {keys.map((_, i) => { const p = getGridP(5, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        {keys.map((_, i) => { 
+           const radius = r * 0.90;
+           const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
+           const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
+           return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
+        })}
         
-        {/* データ */}
+        {/* データ (大きく補正して表示) */}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         
         {/* ラベル */}
-        {keys.map((_, i) => { const p = getGridP(6.2, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        {keys.map((_, i) => { 
+             const radius = r * 0.90 * 1.35; // ラベル位置
+             const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
+             const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
+             return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
+        })}
       </svg>
     </div>
   );
@@ -200,7 +211,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -391,6 +402,13 @@ export default function AiOgiriApp() {
     const split = trimmed.split(/[。！？!?]/);
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
   };
+  const isTopicClear = (topic) => {
+    if (!topic) return false;
+    // 穴埋め記号が含まれていたらNG
+    if (topic.includes('{placeholder}')) return false;
+    return true;
+  };
+  
   const formatAiComment = (comment) => {
     if (!comment) return "";
     return compactComment(comment);
@@ -1033,8 +1051,7 @@ export default function AiOgiriApp() {
         }
         setIsCheckingTopic(false);
     }
-    let topic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
-    if (!topic.includes('{placeholder}')) topic += " {placeholder}";
+    let topic = manualTopicInput;
     if (!topicsList.includes(topic)) {
         setTopicsList(prev => [...prev, topic]);
         saveLearnedTopic(topic);
