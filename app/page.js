@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.41";
+const APP_VERSION = "Ver 0.42";
 const UPDATE_LOGS = [
+  { version: "Ver 0.42", date: "2026/01/25", content: ["AI評価項目とレーダーチャートの整合性を修正", "MyData画面の表示バグ修正"] },
   { version: "Ver 0.41", date: "2026/01/25", content: ["マイデータのグラフ基準を「平均値」に統一"] },
   { version: "Ver 0.40", date: "2026/01/25", content: ["レーダーチャートを大きく見やすく調整", "採点基準を甘口（手札考慮）に変更"] },
-  { version: "Ver 0.39", date: "2026/01/25", content: ["審査中に止まるバグ(newHand)を修正", "AI通信のタイムアウト処理(15秒)を追加"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -33,7 +33,6 @@ const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
 const API_TIMEOUT_MS = 15000; // APIタイムアウト時間
 
-// 修正：穴埋め記号 {placeholder} を完全に排除したお題リスト
 const FALLBACK_TOPICS = [
   "100年後のオリンピックで新しく追加された競技とは？",
   "「この医者、ヤブ医者だな…」第一声は？",
@@ -144,14 +143,12 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 視認性向上のための補正: 
-  // 点数が低くても中心に縮こまらないよう、最低50%の大きさを確保し、そこから値に応じて広がるようにする。
+  // 視認性向上のための補正
   const getP = (v, i) => {
     const val = Math.max(0, v);
     // 0点は中心。それ以外は 0.5 + 0.5 * (val / max) の割合で描画
-    // これにより、1点(0.2)でも 0.5 + 0.1 = 0.6 (60%) の位置に来るため、形がはっきりする。
     const ratio = val <= 0 ? 0 : 0.5 + (val / max) * 0.5;
-    const radius = ratio * r * 0.90; // 0.90はラベルとの余白用
+    const radius = ratio * r * 0.90; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -159,35 +156,27 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   };
   
   const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
-  
-  // 背景のグリッド (5段階)
   const bgLevels = [5, 4, 3, 2, 1];
 
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {/* 背景グリッド */}
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
-             // グリッドは線形に描画 (0, 0.2, 0.4, 0.6, 0.8, 1.0)
+             // グリッドは線形に描画
              const radius = (l / 5) * r * 0.90;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
-        {/* 軸線 */}
         {keys.map((_, i) => { 
            const radius = r * 0.90;
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
-        
-        {/* データ (大きく補正して表示) */}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        
-        {/* ラベル */}
         {keys.map((_, i) => { 
-             const radius = r * 0.90 * 1.35; // ラベル位置
+             const radius = r * 0.90 * 1.35; 
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
              const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
@@ -207,12 +196,9 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
 );
 
 const MyDataModal = ({ stats, onClose, userName }) => {
-  // 通算平均値を計算するヘルパー
   const getTotalAverage = () => {
     const count = stats.playCount || 1;
     const total = stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
-    
-    // totalRadarが存在する場合は、回数で割って平均を出す（マイデータ用）
     if (stats.totalRadar) {
         return {
           surprise: total.surprise / count,
@@ -222,7 +208,6 @@ const MyDataModal = ({ stats, onClose, userName }) => {
           intelligence: total.intelligence / count,
         };
     }
-    // 古いデータ形式(averageRadar)の場合はそのまま返す
     return total;
   };
 
@@ -673,6 +658,7 @@ export default function AiOgiriApp() {
     return uniqueAnswers;
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
+    const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を1-5で評価";
     const p = isManual
       ? `あなたはノリの良いお笑い審査員です。以下のお題と回答に対し、点数（0-100）と、面白いツッコミ（関西弁推奨）を返してください。
 お題: ${topic}
@@ -682,10 +668,10 @@ export default function AiOgiriApp() {
 1. たとえ回答が短かったり意味不明でも、AIのエラーメッセージのような「評価できません」は絶対に禁止。無理やりこじつけて面白おかしくツッコんでください。
 2. 点数は甘めにつけてください（基本60点以上）。
 3. ツッコミは15文字程度の短い一言で。
-4. 5段階評価（1-5）も行ってください。
+4. ${radarDesc}
 
 出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
     return await callGemini(p);
   };
 
@@ -844,8 +830,8 @@ export default function AiOgiriApp() {
 
   const confirmTopic = () => {
       playSound('decision');
-      const t = manualTopicInput.replace(/___+/g, '{placeholder}');
-      setCurrentTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
+      const t = manualTopicInput;
+      setCurrentTopic(t);
       if (gameConfig.mode === 'single') {
           setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true);
@@ -866,7 +852,6 @@ export default function AiOgiriApp() {
       setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
-      // ここで山札からカードを引いて補充する
       if (!isManual && gameConfig.mode === 'single') {
           // 使ったカードを手札から消す
           const currentHand = singlePlayerHand.filter(c => c !== text);
