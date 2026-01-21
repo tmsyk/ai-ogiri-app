@@ -6,16 +6,17 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.34";
+const APP_VERSION = "Ver 0.35";
 const UPDATE_LOGS = [
-  { version: "Ver 0.34", date: "2026/01/25", content: ["レーダーチャートの表示改善（文字被り解消・拡大表示）", "AI採点を甘口に調整"] },
+  { version: "Ver 0.35", date: "2026/01/25", content: ["審査時の変数参照エラー(filledHand)を修正"] },
+  { version: "Ver 0.34", date: "2026/01/25", content: ["レーダーチャートの表示改善", "AI採点を甘口に調整"] },
   { version: "Ver 0.33", date: "2026/01/24", content: ["称号システムの復活", "ラウンド進行の連打防止を強化"] },
 ];
 
@@ -140,13 +141,10 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 視認性を上げるため、値を補正して描画する
-  // 0点は中心、それ以外は「0.2 (20%の大きさ) + 実数値の割合」で計算し、
-  // 小さな値でも潰れずに五角形が見えるようにする。
+  // 1点=20%, 5点=100%になるように計算 (中心を0点とするのではなく、1点を少し浮かせる調整)
   const getP = (v, i) => {
     const val = Math.max(0, v);
     // 補正ロジック: 値が0なら0、それ以外は (0.2 + 0.8 * (val / max)) の割合で描画
-    // これにより、1点でも中心からある程度離れた位置にプロットされる
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; // 0.90はラベルとの余白用
     return { 
@@ -188,7 +186,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -317,7 +315,7 @@ export default function AiOgiriApp() {
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
 
   const [currentUser, setCurrentUser] = useState(null);
-  const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, averageRadar: {} });
+  const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, totalRadar: {} });
   const [hallOfFame, setHallOfFame] = useState([]);
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
@@ -406,16 +404,16 @@ export default function AiOgiriApp() {
       setUserStats(prev => {
           const newCount = (prev.playCount || 0) + 1;
           const newMax = Math.max(prev.maxScore || 0, score);
-          const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
-          const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
+          const prevRadar = prev.totalRadar || prev.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
+          const r = radar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
           const newRadar = {
-              surprise: (prevRadar.surprise * (newCount - 1) + r.surprise) / newCount,
-              context: (prevRadar.context * (newCount - 1) + r.context) / newCount,
-              punchline: (prevRadar.punchline * (newCount - 1) + r.punchline) / newCount,
-              humor: (prevRadar.humor * (newCount - 1) + r.humor) / newCount,
-              intelligence: (prevRadar.intelligence * (newCount - 1) + r.intelligence) / newCount,
+              surprise: (prevRadar.surprise || 0) + (r.surprise || 0),
+              context: (prevRadar.context || 0) + (r.context || 0),
+              punchline: (prevRadar.punchline || 0) + (r.punchline || 0),
+              humor: (prevRadar.humor || 0) + (r.humor || 0),
+              intelligence: (prevRadar.intelligence || 0) + (r.intelligence || 0),
           };
-          const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
+          const newData = { playCount: newCount, maxScore: newMax, totalRadar: newRadar };
           localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData));
           return newData;
       });
@@ -496,7 +494,21 @@ export default function AiOgiriApp() {
     const localLearned = localStorage.getItem('aiOgiriLearnedData'); if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
     const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
     const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
+    
+    const savedStats = localStorage.getItem('aiOgiriUserStats');
+    if (savedStats) {
+      const parsed = JSON.parse(savedStats);
+      if (!parsed.totalRadar && parsed.averageRadar && parsed.playCount) {
+        parsed.totalRadar = {
+          surprise: (parsed.averageRadar.surprise || 0) * parsed.playCount,
+          context: (parsed.averageRadar.context || 0) * parsed.playCount,
+          punchline: (parsed.averageRadar.punchline || 0) * parsed.playCount,
+          humor: (parsed.averageRadar.humor || 0) * parsed.playCount,
+          intelligence: (parsed.averageRadar.intelligence || 0) * parsed.playCount,
+        };
+      }
+      if (parsed.totalRadar || parsed.averageRadar) setUserStats(parsed);
+    }
     const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
     const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
     if (auth) { signInAnonymously(auth).catch(()=>{}); onAuthStateChanged(auth, u => setCurrentUser(u)); }
@@ -683,6 +695,7 @@ export default function AiOgiriApp() {
           syncActiveCards(newPlayers.map(p => p.hand), currentD);
       }
       
+      setCardDeck(currentD);
       setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
 
@@ -747,11 +760,8 @@ export default function AiOgiriApp() {
       setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
-      // ここで山札からカードを引いて補充する
       if (!isManual && gameConfig.mode === 'single') {
-          // 使ったカードを手札から消す
-          const currentHand = singlePlayerHand.filter(c => c !== text);
-          
+          const newHand = singlePlayerHand.filter(c => c !== text);
           let nextDeck = [...cardDeck];
           
           // 山札が足りなければ補充（非同期）
@@ -764,16 +774,15 @@ export default function AiOgiriApp() {
           // 山札から1枚引く (あれば)
           if (nextDeck.length > 0) {
               const drawCard = nextDeck.shift();
-              currentHand.push(drawCard);
+              newHand.push(drawCard);
           } else {
-              // 山札がない場合の緊急フォールバック
                const fallback = shuffleArray(FALLBACK_ANSWERS)[0];
-               currentHand.push(fallback);
+               newHand.push(fallback);
           }
 
-          setSinglePlayerHand(currentHand);
+          setSinglePlayerHand(newHand);
           setCardDeck(nextDeck);
-          syncActiveCards([filledHand], filledDeck);
+          syncActiveCards([newHand], nextDeck);
       }
 
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
@@ -1238,26 +1247,11 @@ export default function AiOgiriApp() {
                              {gameConfig.mode === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}${gameConfig.singleMode === 'time_attack' ? '点' : '点'}`}
                              {gameConfig.singleMode === 'time_attack' && <div className="text-lg mt-2 font-bold">回答数: {answerCount}回</div>}
                         </div>
-                        {gameConfig.mode === 'single' && (
-                           <>
-                             {gameConfig.singleMode === 'score_attack' && (
-                                <div className="mb-8 p-4 bg-yellow-100 rounded-xl inline-block shadow-sm">
-                                  <p className="text-sm font-bold text-yellow-800 mb-1">あなたの称号</p>
-                                  <p className="text-3xl font-black text-yellow-600">
-                                    {players[0].score >= 450 ? "お笑い神" : 
-                                     players[0].score >= 400 ? "大御所" : 
-                                     players[0].score >= 300 ? "真打ち" : 
-                                     players[0].score >= 200 ? "前座" : "見習い"}
-                                  </p>
-                                </div>
-                             )}
-                             {gameRadars.length > 0 && (
-                                <div className="mb-8 flex justify-center flex-col items-center mt-4">
-                                    <p className="text-sm font-bold text-slate-500 mb-4">今回の平均評価</p>
-                                    <RadarChart data={getAverageRadar()} size={180} maxValue={5} />
-                                </div>
-                             )}
-                           </>
+                        {gameConfig.mode === 'single' && gameRadars.length > 0 && (
+                            <div className="mb-6 flex justify-center flex-col items-center">
+                                <p className="text-sm font-bold text-slate-500 mb-2">今回の平均評価</p>
+                                <RadarChart data={getAverageRadar()} size={180} maxValue={5} />
+                            </div>
                         )}
                         <button onClick={() => setAppMode('title')} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl">タイトルへ</button>
                     </div>
