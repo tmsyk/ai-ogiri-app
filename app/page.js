@@ -13,10 +13,10 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.38";
+const APP_VERSION = "Ver 0.39";
 const UPDATE_LOGS = [
-  { version: "Ver 0.38", date: "2026/01/25", content: ["自由回答が表示されない不具合を修正", "レーダーチャートの表示ロジックを改良", "AIをノリの良い性格に調整"] },
-  { version: "Ver 0.37", date: "2026/01/25", content: ["レーダーチャートの視認性を向上", "結果画面のレイアウト調整"] },
+  { version: "Ver 0.39", date: "2026/01/25", content: ["審査中に止まるバグ(newHand)を修正", "AI通信のタイムアウト処理(15秒)を追加"] },
+  { version: "Ver 0.38", date: "2026/01/25", content: ["自由回答が表示されない不具合を修正", "レーダーチャートの表示ロジックを改良"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -30,6 +30,7 @@ const HAND_SIZE = 6;
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
+const API_TIMEOUT_MS = 15000; // APIタイムアウト時間
 
 // 修正：穴埋め記号 {placeholder} を完全に排除したお題リスト
 const FALLBACK_TOPICS = [
@@ -138,7 +139,7 @@ const Card = ({ text, isSelected, onClick, disabled }) => (
 );
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
-  const r = size / 2, c = size / 2;
+  const r = size / 2, c = size / 2, max = maxValue;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
@@ -155,7 +156,6 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const getDataP = (v, i) => {
     const val = Math.max(0, v);
     // 0点は中心。それ以外は、半径の40%～100%の範囲にマッピングして大きく見せる
-    // 例: 1点(0.2) -> 0.4 + 0.6*0.2 = 0.52 (52%の大きさ)
     const ratio = val <= 0 ? 0 : 0.4 + (val / maxValue) * 0.6;
     const radius = ratio * r * 0.90;
     return { 
@@ -170,14 +170,14 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {/* 背景グリッド (均等間隔) */}
+        {/* 背景グリッド */}
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => getGridP(l, i).x + "," + getGridP(l, i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {/* 軸線 */}
         {keys.map((_, i) => { const p = getGridP(5, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
         
-        {/* データ (大きく補正して表示) */}
+        {/* データ */}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         
         {/* ラベル */}
@@ -200,7 +200,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -581,15 +581,30 @@ export default function AiOgiriApp() {
   }, [appMode, cardDeck.length, isAiActive]);
 
   const callGemini = async (prompt) => {
+      // タイムアウト設定付きのFetch
       if (!isAiActive) return null;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+      
       try {
-          const res = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
+          const res = await fetch('/api/gemini', { 
+            method: 'POST', 
+            headers: { 'Content-Type': 'application/json' }, 
+            body: JSON.stringify({ prompt }),
+            signal: controller.signal 
+          });
+          clearTimeout(timeoutId);
+          
           if (!res.ok) throw new Error();
           const data = await res.json();
           const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
           const json = text.match(/\{[\s\S]*\}/);
           return json ? JSON.parse(json[0]) : JSON.parse(text);
-      } catch (e) { return null; }
+      } catch (e) { 
+          clearTimeout(timeoutId);
+          console.log("API Error or Timeout:", e);
+          return null; 
+      }
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
   const fetchAiTopic = async () => {
@@ -771,6 +786,11 @@ export default function AiOgiriApp() {
       try {
           const res = await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."}`);
           t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+          
+          // 万が一 {placeholder} が入っていたら除去
+          if (t.includes('{placeholder}')) {
+              t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
+          }
       } catch (e) {
           t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
       }
@@ -808,7 +828,6 @@ export default function AiOgiriApp() {
       setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
-      // ここで山札からカードを引いて補充する
       if (!isManual && gameConfig.mode === 'single') {
           // 使ったカードを手札から消す
           const currentHand = singlePlayerHand.filter(c => c !== text);
@@ -825,15 +844,15 @@ export default function AiOgiriApp() {
           // 山札から1枚引く
           if (nextDeck.length > 0) {
               const drawCard = nextDeck.shift();
-              newHand.push(drawCard);
+              currentHand.push(drawCard);
           } else {
                const fallback = shuffleArray(FALLBACK_ANSWERS)[0];
-               newHand.push(fallback);
+               currentHand.push(fallback);
           }
 
-          setSinglePlayerHand(newHand);
+          setSinglePlayerHand(currentHand);
           setCardDeck(nextDeck);
-          syncCardsWrapper([newHand], nextDeck);
+          syncCardsWrapper([currentHand], nextDeck);
       }
 
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
@@ -891,6 +910,7 @@ export default function AiOgiriApp() {
       if (isAdvancingRound) return;
       setIsAdvancingRound(true);
       
+      // 即座に準備中へ
       setGamePhase('drawing');
 
       setTimeout(() => {
@@ -1013,7 +1033,8 @@ export default function AiOgiriApp() {
         }
         setIsCheckingTopic(false);
     }
-    let topic = manualTopicInput;
+    let topic = manualTopicInput.replace(/___+/g, "{placeholder}").replace(/＿{3,}/g, "{placeholder}");
+    if (!topic.includes('{placeholder}')) topic += " {placeholder}";
     if (!topicsList.includes(topic)) {
         setTopicsList(prev => [...prev, topic]);
         saveLearnedTopic(topic);
@@ -1172,7 +1193,7 @@ export default function AiOgiriApp() {
                             <div className="flex gap-2">
                                 <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
                                 <button onClick={() => {
-                                    if(gameConfig.mode==='single') submitAnswer(manualAnswerInput, true);
+                                    if(gameConfig.mode==='single') handleSingleSubmitManual(manualAnswerInput);
                                     else handleMultiSubmit(manualAnswerInput);
                                 }} disabled={!manualAnswerInput.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
                             </div>
