@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.40";
+const APP_VERSION = "Ver 0.41";
 const UPDATE_LOGS = [
+  { version: "Ver 0.41", date: "2026/01/25", content: ["マイデータのグラフ基準を「平均値」に統一"] },
   { version: "Ver 0.40", date: "2026/01/25", content: ["レーダーチャートを大きく見やすく調整", "採点基準を甘口（手札考慮）に変更"] },
   { version: "Ver 0.39", date: "2026/01/25", content: ["審査中に止まるバグ(newHand)を修正", "AI通信のタイムアウト処理(15秒)を追加"] },
-  { version: "Ver 0.38", date: "2026/01/25", content: ["自由回答が表示されない不具合を修正", "レーダーチャートの表示ロジックを改良"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -146,7 +146,6 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   
   // 視認性向上のための補正: 
   // 点数が低くても中心に縮こまらないよう、最低50%の大きさを確保し、そこから値に応じて広がるようにする。
-  // これにより、評価の傾向（形）がはっきりと見えるようになる。
   const getP = (v, i) => {
     const val = Math.max(0, v);
     // 0点は中心。それ以外は 0.5 + 0.5 * (val / max) の割合で描画
@@ -207,13 +206,34 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
   </ModalBase>
 );
 
-const MyDataModal = ({ stats, onClose, userName }) => (
-  <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
-      <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
-      <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
-  </ModalBase>
-);
+const MyDataModal = ({ stats, onClose, userName }) => {
+  // 通算平均値を計算するヘルパー
+  const getTotalAverage = () => {
+    const count = stats.playCount || 1;
+    const total = stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 };
+    
+    // totalRadarが存在する場合は、回数で割って平均を出す（マイデータ用）
+    if (stats.totalRadar) {
+        return {
+          surprise: total.surprise / count,
+          context: total.context / count,
+          punchline: total.punchline / count,
+          humor: total.humor / count,
+          intelligence: total.intelligence / count,
+        };
+    }
+    // 古いデータ形式(averageRadar)の場合はそのまま返す
+    return total;
+  };
+
+  return (
+    <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
+        <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
+        <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
+        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析（平均）</p>{stats.playCount > 0 ? ( <RadarChart data={getTotalAverage()} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+    </ModalBase>
+  );
+};
 
 const HallOfFameModal = ({ onClose, data }) => {
   const sortedData = [...data].sort((a, b) => b.score - a.score).slice(0, 20);
@@ -824,8 +844,8 @@ export default function AiOgiriApp() {
 
   const confirmTopic = () => {
       playSound('decision');
-      const t = manualTopicInput;
-      setCurrentTopic(t);
+      const t = manualTopicInput.replace(/___+/g, '{placeholder}');
+      setCurrentTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
       if (gameConfig.mode === 'single') {
           setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true);
@@ -846,6 +866,7 @@ export default function AiOgiriApp() {
       setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
+      // ここで山札からカードを引いて補充する
       if (!isManual && gameConfig.mode === 'single') {
           // 使ったカードを手札から消す
           const currentHand = singlePlayerHand.filter(c => c !== text);
