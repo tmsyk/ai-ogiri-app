@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.43";
+const APP_VERSION = "Ver 0.44";
 const UPDATE_LOGS = [
+  { version: "Ver 0.44", date: "2026/01/25", content: ["採点基準を厳正化（0-5点評価）", "レーダーチャートのメリハリを調整"] },
   { version: "Ver 0.43", date: "2026/01/25", content: ["スコア計算をレーダーチャート評価連動に変更", "グラフ表示位置のレイアウト調整"] },
   { version: "Ver 0.42", date: "2026/01/25", content: ["AI評価項目とレーダーチャートの整合性を修正", "MyData画面の表示バグ修正"] },
-  { version: "Ver 0.41", date: "2026/01/25", content: ["マイデータのグラフ基準を「平均値」に統一"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -146,13 +146,13 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 視認性向上のための補正: 
-  // 点数が低くても中心に縮こまらないよう、最低50%の大きさを確保
+  // 視認性向上のための補正
   const getP = (v, i) => {
     const val = Math.max(0, v);
-    // 0点は中心。それ以外は 0.5 + 0.5 * (val / max) の割合で描画
-    const ratio = val <= 0 ? 0 : 0.5 + (val / max) * 0.5;
-    const radius = ratio * r; 
+    // 0点は中心。それ以外は 0.2 + 0.8 * (val / max) の割合で描画
+    // これにより、1点と5点の差を強調しつつ、最低限の大きさは確保する。
+    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
+    const radius = ratio * r * 0.90; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -169,13 +169,13 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
              // グリッドは線形に描画
-             const radius = (l / 5) * r;
+             const radius = (l / 5) * r * 0.90;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {/* 軸線 */}
         {keys.map((_, i) => { 
-           const radius = r;
+           const radius = r * 0.90;
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
@@ -183,7 +183,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         {/* ラベル位置 */}
         {keys.map((_, i) => { 
-             const radius = r * 1.35; 
+             const radius = r * 0.90 * 1.35; // ラベル位置
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
              const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
@@ -665,20 +665,20 @@ export default function AiOgiriApp() {
     return uniqueAnswers;
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
+    const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を0-5で厳正に評価（3が標準）";
     const p = isManual
-      ? `あなたはノリの良いお笑い審査員です。以下のお題と回答に対し、点数（0-100）と、面白いツッコミ（関西弁推奨）を返してください。
+      ? `あなたはプロのお笑い審査員です。以下のお題と回答に対し、厳正な審査を行ってください。
 お題: ${topic}
 回答: ${answer}
 
 重要ルール:
-1. たとえ回答が短かったり意味不明でも、AIのエラーメッセージのような「評価できません」は絶対に禁止。無理やりこじつけて面白おかしくツッコんでください。
-2. 点数は甘めにつけてください（基本60点以上）。
+1. 回答が成立していない場合は低い点数をつけて構いませんが、エラーメッセージではなくツッコミを入れてください。
+2. 採点は甘くせず、面白さをシビアに評価してください（基準は5段階評価の3）。
 3. ツッコミは15文字程度の短い一言で。
-4. 5段階評価（1-5）も行ってください。
-5. レーダーチャートの値を使って総合得点を算出するため、5段階評価は必ず出力してください。
+4. ${radarDesc}
 
 出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価（1-5） 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 レーダーチャートの合計(0-25)に基づいて算出されるため、各項目を0-5で厳正に評価。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
     return await callGemini(p);
   };
 
@@ -1087,6 +1087,11 @@ export default function AiOgiriApp() {
     } else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
 
+  const handleSingleSubmitManual = async (text) => {
+    // 自由回答用だが、submitAnswerに統合するためラッパーとして機能
+    submitAnswer(text, true);
+  };
+
   const handleTopicFeedback = (isGood) => {
     playSound('tap');
     setTopicFeedback(isGood ? 'good' : 'bad');
@@ -1229,7 +1234,7 @@ export default function AiOgiriApp() {
                             <div className="flex gap-2">
                                 <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
                                 <button onClick={() => {
-                                    if(gameConfig.mode==='single') submitAnswer(manualAnswerInput, true);
+                                    if(gameConfig.mode==='single') handleSingleSubmitManual(manualAnswerInput);
                                     else handleMultiSubmit(manualAnswerInput);
                                 }} disabled={!manualAnswerInput.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
                             </div>
