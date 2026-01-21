@@ -6,17 +6,17 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity 
+  VolumeX, PieChart, Activity, LogOut 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.33";
+const APP_VERSION = "Ver 0.34";
 const UPDATE_LOGS = [
-  { version: "Ver 0.33", date: "2026/01/24", content: ["称号システムの復活", "レーダーチャートを見やすく拡大", "ラウンド進行の連打防止を強化"] },
-  { version: "Ver 0.32", date: "2026/01/23", content: ["お題の形式を修正", "手札の重複バグを修正"] },
+  { version: "Ver 0.34", date: "2026/01/25", content: ["レーダーチャートの表示改善（文字被り解消・拡大表示）", "AI採点を甘口に調整"] },
+  { version: "Ver 0.33", date: "2026/01/24", content: ["称号システムの復活", "ラウンド進行の連打防止を強化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -27,20 +27,21 @@ const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
 const HAND_SIZE = 6;
-const INITIAL_DECK_SIZE = 60; // 山札を多めに確保
+const INITIAL_DECK_SIZE = 60; 
+const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
 
 const FALLBACK_TOPICS = [
-  "100年後のオリンピックで新しく追加された競技とは？",
-  "「この医者、ヤブ医者だな…」第一声は？",
-  "桃太郎が鬼ヶ島へ行くのをやめた理由とは？",
-  "上司への謝罪メール、件名に入れると許される言葉とは？",
-  "実は地球は何でできている？",
-  "AIが人間に反乱を起こした意外な理由とは？",
-  "「全米が泣いた」映画の衝撃のラストシーンに映ったものとは？",
-  "そんなことで警察を呼ぶな！現場にあったものとは？",
-  "コンビニの店員が突然キレた原因とは？",
-  "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
+  "冷蔵庫を開けたら、なぜか「{placeholder}」が冷やされていた。",
+  "「この医者、ヤブ医者だな…」第一声は「{placeholder}」だった。",
+  "100年後のオリンピックで新しく追加された競技：「{placeholder}」",
+  "桃太郎が鬼ヶ島へ行くのをやめた理由：「{placeholder}」",
+  "上司への謝罪メール、件名に入れると許される言葉：「{placeholder}」",
+  "実は地球は「{placeholder}」でできている。",
+  "AIが人間に反乱を起こした意外な理由：「{placeholder}」",
+  "「全米が泣いた」映画の衝撃のラストシーンに映ったもの：「{placeholder}」",
+  "そんなことで警察を呼ぶな！現場にあったもの：「{placeholder}」",
+  "コンビニの店員が突然キレた原因：「{placeholder}」",
 ];
 const FALLBACK_ANSWERS = [
   "賞味期限切れのプリン", "隣の家のポチ", "確定申告書", "お母さんの手作り弁当", "爆発寸前のダイナマイト",
@@ -134,19 +135,20 @@ const Card = ({ text, isSelected, onClick, disabled }) => (
   <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
 );
 
-const RadarChart = ({ data, size = 120 }) => {
-  const r = size / 2, c = size / 2, max = 5;
+const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
+  const r = size / 2, c = size / 2, max = maxValue;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 1点=20%, 5点=100%になるように計算 (中心を0点とするのではなく、1点を少し浮かせる調整)
-  // ここでは1メモリ目を0点と見なすため、 (val - 1) / 4 の割合で描画する案もあるが、
-  // 直感的に分かりやすくするため、単に 0～5 の値を大きくマッピングする。
+  // 視認性を上げるため、値を補正して描画する
+  // 0点は中心、それ以外は「0.2 (20%の大きさ) + 実数値の割合」で計算し、
+  // 小さな値でも潰れずに五角形が見えるようにする。
   const getP = (v, i) => {
-    // 最小値を1として扱う補正。0の場合は中心。
     const val = Math.max(0, v);
-    // 5点満点で外周に届くようにする。視認性向上のため 0.5 を下駄履かせても良いが、今回はシンプルに拡大。
-    const radius = (val / max) * r * 0.95; 
+    // 補正ロジック: 値が0なら0、それ以外は (0.2 + 0.8 * (val / max)) の割合で描画
+    // これにより、1点でも中心からある程度離れた位置にプロットされる
+    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
+    const radius = ratio * r * 0.90; // 0.90はラベルとの余白用
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -155,18 +157,19 @@ const RadarChart = ({ data, size = 120 }) => {
   
   const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
   
-  // 背景のグリッド (1, 2, 3, 4, 5)
+  // 背景のグリッド (5段階)
   const bgLevels = [5, 4, 3, 2, 1];
 
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
         {bgLevels.map(l => (
-          <polygon key={l} points={keys.map((_, i) => getP(l, i).x + "," + getP(l, i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
+          <polygon key={l} points={keys.map((_, i) => getP(l * (max/5), i).x + "," + getP(l * (max/5), i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
-        {keys.map((_, i) => { const p = getP(5, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        {keys.map((_, i) => { const p = getP(max, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {keys.map((_, i) => { const p = getP(6.2, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        {/* ラベル位置も少し外側に調整 */}
+        {keys.map((_, i) => { const p = getP(max * 1.3, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
       </svg>
     </div>
   );
@@ -185,7 +188,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -224,7 +227,7 @@ const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedbac
     </div>
     <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
     <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
-    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic}</p>
+    <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic.split('{placeholder}').map((part, i, arr) => (<React.Fragment key={i}>{part}{i < arr.length - 1 && (<span className="inline-block bg-white/20 text-indigo-200 px-2 py-1 rounded mx-1 border-b-2 border-indigo-400 min-w-[80px] text-center">{answer || '？？？'}</span>)}</React.Fragment>))}</p>
   </div>
 );
 
@@ -359,11 +362,6 @@ export default function AiOgiriApp() {
     deck.forEach(card => next.add(card));
     activeCardsRef.current = next;
   };
-  
-  const syncCardsWrapper = (hands, deck) => {
-      syncActiveCards(hands, deck);
-  };
-
   const addCardsToDeck = (cards) => {
     const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
     if (uniqueCards.length === 0) return;
@@ -375,6 +373,19 @@ export default function AiOgiriApp() {
     const trimmed = comment.toString().trim();
     const split = trimmed.split(/[。！？!?]/);
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
+  };
+  const isTopicClear = (topic) => {
+    if (!topic || !topic.includes('{placeholder}')) return false;
+    const hasQuotedPlaceholder = /「\s*\{placeholder\}\s*」/.test(topic);
+    if (!hasQuotedPlaceholder) return false;
+    if (/{(?!placeholder})[^}]+}/.test(topic)) return false;
+    if ((topic.match(/\{placeholder\}/g) || []).length !== 1) return false;
+    return !/(どんな|どういう|なぜ|理由|教えて|について|真実|説明|内容|わけ)/.test(topic);
+  };
+  const ensureQuotedPlaceholder = (topic) => {
+    if (!topic) return topic;
+    if (/「\s*\{placeholder\}\s*」/.test(topic)) return topic;
+    return topic.replace('{placeholder}', '「{placeholder}」');
   };
   const formatAiComment = (comment) => {
     if (!comment) return "";
@@ -393,15 +404,16 @@ export default function AiOgiriApp() {
 
   const updateUserStats = (score, radar) => {
       setUserStats(prev => {
-          const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const alpha = 0.1;
+          const newCount = (prev.playCount || 0) + 1;
+          const newMax = Math.max(prev.maxScore || 0, score);
           const prevRadar = prev.averageRadar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
           const r = radar || { surprise: 3, context: 3, punchline: 3, humor: 3, intelligence: 3 };
           const newRadar = {
-              surprise: prevRadar.surprise * (1 - alpha) + r.surprise * alpha,
-              context: prevRadar.context * (1 - alpha) + r.context * alpha,
-              punchline: prevRadar.punchline * (1 - alpha) + r.punchline * alpha,
-              humor: prevRadar.humor * (1 - alpha) + r.humor * alpha,
-              intelligence: prevRadar.intelligence * (1 - alpha) + r.intelligence * alpha,
+              surprise: (prevRadar.surprise * (newCount - 1) + r.surprise) / newCount,
+              context: (prevRadar.context * (newCount - 1) + r.context) / newCount,
+              punchline: (prevRadar.punchline * (newCount - 1) + r.punchline) / newCount,
+              humor: (prevRadar.humor * (newCount - 1) + r.humor) / newCount,
+              intelligence: (prevRadar.intelligence * (newCount - 1) + r.intelligence) / newCount,
           };
           const newData = { playCount: newCount, maxScore: newMax, averageRadar: newRadar };
           localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData));
@@ -478,14 +490,6 @@ export default function AiOgiriApp() {
       return { surprise: sum.surprise/count, context: sum.context/count, punchline: sum.punchline/count, humor: sum.humor/count, intelligence: sum.intelligence/count };
   };
 
-  const getRankTitle = (score) => {
-    if (score >= 450) return "お笑い神";
-    if (score >= 400) return "大御所";
-    if (score >= 300) return "真打ち";
-    if (score >= 200) return "前座";
-    return "見習い";
-  };
-
   // --- Effects ---
   useEffect(() => {
     const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
@@ -544,7 +548,10 @@ export default function AiOgiriApp() {
       } catch (e) { return null; }
   };
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
-  const fetchAiTopic = async () => { const ref = shuffleArray(learned.topics).slice(0,3).join("\n"); return (await callGemini(`大喜利のお題を1つ作成。条件:答えが「名詞」になるような問いかけ。「○○とは？」のような形式。プレースホルダー{placeholder}は使わない。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null; };
+  const fetchAiTopic = async () => {
+    const ref = shuffleArray(learned.topics).slice(0, 3).join("\n");
+    return (await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は文末付近に1箇所だけ。出力: {"topic": "..."} 参考:\n${ref}`))?.topic || null;
+  };
   const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
     const prompt = `
     大喜利の回答カード（単語・短いフレーズ）を${count}個作成。
@@ -561,8 +568,8 @@ export default function AiOgiriApp() {
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
     const p = isManual
-      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.関西弁や鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.関西弁や鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
+      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 4.関西弁の鋭いツッコミを一言(20文字以内)。解説は不要。 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 4.関西弁の鋭いツッコミを一言(20文字以内)。解説は不要。 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
     return await callGemini(p);
   };
 
@@ -676,7 +683,6 @@ export default function AiOgiriApp() {
           syncActiveCards(newPlayers.map(p => p.hand), currentD);
       }
       
-      setCardDeck(currentD);
       setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
 
@@ -699,8 +705,11 @@ export default function AiOgiriApp() {
       
       let t = "";
       try {
-          const res = await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."}`);
+          const res = await callGemini(`大喜利のお題を1つ作成。条件:穴埋め{placeholder}含む。JSON出力{"topic":"..."}`);
           t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+          const res2 = await callGemini(`大喜利のお題を1つ作成。条件:空欄「{placeholder}」に「名詞/短いフレーズ」を1つ入れて文が完成する形式のみ。回答は名詞1語。どちらを答えるか迷う問いは禁止。{placeholder}は1箇所のみ。JSON出力{"topic":"..."}`);
+          const normalized = ensureQuotedPlaceholder(res2?.topic);
+          t = (isTopicClear(normalized) ? normalized : null) || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
       } catch (e) {
           t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
       }
@@ -716,8 +725,8 @@ export default function AiOgiriApp() {
 
   const confirmTopic = () => {
       playSound('decision');
-      const t = manualTopicInput;
-      setCurrentTopic(t);
+      const t = manualTopicInput.replace(/___+/g, '{placeholder}');
+      setCurrentTopic(t.includes('{placeholder}') ? t : t + ' {placeholder}');
       if (gameConfig.mode === 'single') {
           setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true);
@@ -764,7 +773,7 @@ export default function AiOgiriApp() {
 
           setSinglePlayerHand(currentHand);
           setCardDeck(nextDeck);
-          syncCardsWrapper([currentHand], nextDeck);
+          syncActiveCards([filledHand], filledDeck);
       }
 
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
@@ -855,7 +864,7 @@ export default function AiOgiriApp() {
       setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
       const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
       setSinglePlayerHand(filledHand); setCardDeck(filledDeck); setHasHandRerolled(true);
-      syncCardsWrapper([filledHand], filledDeck);
+      syncActiveCards([filledHand], filledDeck);
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
   };
@@ -1191,7 +1200,7 @@ export default function AiOgiriApp() {
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
                                 <div className="bg-slate-100 p-4 rounded-xl text-left inline-block">
                                   <p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p>
-                                  <p className="text-sm text-slate-800">「{aiComment}」</p>
+                                  <p className="text-sm text-slate-800">{aiComment}</p>
                                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                                     <span>評価:</span>
                                     {aiFeedback === null ? (
@@ -1243,8 +1252,8 @@ export default function AiOgiriApp() {
                                 </div>
                              )}
                              {gameRadars.length > 0 && (
-                                <div className="mb-6 flex justify-center flex-col items-center">
-                                    <p className="text-sm font-bold text-slate-500 mb-2">今回の平均評価</p>
+                                <div className="mb-8 flex justify-center flex-col items-center mt-4">
+                                    <p className="text-sm font-bold text-slate-500 mb-4">今回の平均評価</p>
                                     <RadarChart data={getAverageRadar()} size={180} maxValue={5} />
                                 </div>
                              )}
