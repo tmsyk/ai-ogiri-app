@@ -6,17 +6,17 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity 
+  VolumeX, PieChart, Activity, LogOut 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.37";
+const APP_VERSION = "Ver 0.38";
 const UPDATE_LOGS = [
-  { version: "Ver 0.37", date: "2026/01/25", content: ["レーダーチャートの視認性を向上（傾向重視の表示）", "結果画面のレイアウト調整"] },
-  { version: "Ver 0.36", date: "2026/01/25", content: ["穴埋め形式のお題を完全に廃止", "AI採点のエラーメッセージ発生を防止"] },
+  { version: "Ver 0.38", date: "2026/01/25", content: ["自由回答が表示されない不具合を修正", "レーダーチャートの表示ロジックを改良", "AIをノリの良い性格に調整"] },
+  { version: "Ver 0.37", date: "2026/01/25", content: ["レーダーチャートの視認性を向上", "結果画面のレイアウト調整"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -138,37 +138,50 @@ const Card = ({ text, isSelected, onClick, disabled }) => (
 );
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
-  const r = size / 2, c = size / 2, max = maxValue;
+  const r = size / 2, c = size / 2;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 視認性向上のための補正: 
-  // 点数が低くても中心に縮こまらないよう、最低40%の大きさを確保し、そこから値に応じて広がるようにする。
-  // これにより、評価の傾向（形）がはっきりと見えるようになる。
-  const getP = (v, i) => {
+  // 背景グリッド用の座標計算（0～5を均等に）
+  const getGridP = (v, i) => {
+    const radius = (v / 5) * r * 0.90; 
+    return { 
+      x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
+      y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
+    };
+  };
+
+  // データ描画用の座標計算（補正あり：大きく見せる）
+  const getDataP = (v, i) => {
     const val = Math.max(0, v);
-    // 0点なら0、それ以外は 0.4 + 0.6 * (val / max) の割合で描画
-    const ratio = val <= 0 ? 0 : 0.4 + (val / max) * 0.6;
-    const radius = ratio * r * 0.85; // ラベル被り防止のため少し縮小
+    // 0点は中心。それ以外は、半径の40%～100%の範囲にマッピングして大きく見せる
+    // 例: 1点(0.2) -> 0.4 + 0.6*0.2 = 0.52 (52%の大きさ)
+    const ratio = val <= 0 ? 0 : 0.4 + (val / maxValue) * 0.6;
+    const radius = ratio * r * 0.90;
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
     };
   };
   
-  const points = keys.map((k, i) => getP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
+  const points = keys.map((k, i) => getDataP(data[k] || 0, i)).map(p => `${p.x},${p.y}`).join(" ");
   const bgLevels = [5, 4, 3, 2, 1];
 
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
+        {/* 背景グリッド (均等間隔) */}
         {bgLevels.map(l => (
-          <polygon key={l} points={keys.map((_, i) => getP(l * (max/5), i).x + "," + getP(l * (max/5), i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
+          <polygon key={l} points={keys.map((_, i) => getGridP(l, i).x + "," + getGridP(l, i).y).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
-        {keys.map((_, i) => { const p = getP(max, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        {/* 軸線 */}
+        {keys.map((_, i) => { const p = getGridP(5, i); return <line key={i} x1={c} y1={c} x2={p.x} y2={p.y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        
+        {/* データ (大きく補正して表示) */}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {/* ラベル位置を調整して文字被りを防ぐ */}
-        {keys.map((_, i) => { const p = getP(max * 1.35, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        
+        {/* ラベル */}
+        {keys.map((_, i) => { const p = getGridP(6.2, i); return ( <text key={i} x={p.x} y={p.y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
       </svg>
     </div>
   );
@@ -187,7 +200,7 @@ const MyDataModal = ({ stats, onClose, userName }) => (
   <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
       <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
       <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+      <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析</p>{stats.playCount > 0 ? ( <RadarChart data={stats.totalRadar || stats.averageRadar || { surprise: 0, context: 0, punchline: 0, humor: 0, intelligence: 0 }} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
   </ModalBase>
 );
 
@@ -226,7 +239,6 @@ const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedbac
     </div>
     <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
     <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
-    {/* 穴埋めではない通常の形式で表示 */}
     <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic}</p>
   </div>
 );
@@ -609,7 +621,17 @@ export default function AiOgiriApp() {
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
     const p = isManual
-      ? `お題:${topic} 回答:${answer} 1.不適切チェック(NGならtrue) 2.5項目(意外性,文脈,瞬発力,毒気,知性)1-5点 3.採点(0-100) 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":bool,"radar":{...}}`
+      ? `あなたはノリの良いお笑い審査員です。以下のお題と回答に対し、点数（0-100）と、面白いツッコミ（関西弁推奨）を返してください。
+お題: ${topic}
+回答: ${answer}
+
+重要ルール:
+1. たとえ回答が短かったり意味不明でも、AIのエラーメッセージのような「評価できません」は絶対に禁止。無理やりこじつけて面白おかしくツッコんでください。
+2. 点数は甘めにつけてください（基本60点以上）。
+3. ツッコミは15文字程度の短い一言で。
+4. 5段階評価（1-5）も行ってください。
+
+出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
       : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{...}}`;
     return await callGemini(p);
   };
@@ -711,7 +733,7 @@ export default function AiOgiriApp() {
           setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
           setSinglePlayerHand(pHand);
           setMasterIndex(0);
-          syncActiveCards([pHand], currentD);
+          syncCardsWrapper([pHand], currentD);
       } else {
           const newPlayers = [];
           for(let i=0; i<gameConfig.playerCount; i++){
@@ -721,7 +743,7 @@ export default function AiOgiriApp() {
           }
           setPlayers(newPlayers);
           setMasterIndex(Math.floor(Math.random() * gameConfig.playerCount));
-          syncActiveCards(newPlayers.map(p => p.hand), currentD);
+          syncCardsWrapper(newPlayers.map(p => p.hand), currentD);
       }
       
       setCardDeck(currentD);
@@ -749,11 +771,6 @@ export default function AiOgiriApp() {
       try {
           const res = await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."}`);
           t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
-          
-          // 万が一 {placeholder} が入っていたら除去
-          if (t.includes('{placeholder}')) {
-              t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
-          }
       } catch (e) {
           t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
       }
@@ -791,8 +808,11 @@ export default function AiOgiriApp() {
       setGamePhase('judging');
       
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
+      // ここで山札からカードを引いて補充する
       if (!isManual && gameConfig.mode === 'single') {
-          const newHand = singlePlayerHand.filter(c => c !== text);
+          // 使ったカードを手札から消す
+          const currentHand = singlePlayerHand.filter(c => c !== text);
+          
           let nextDeck = [...cardDeck];
           
           // 山札が足りなければ補充（非同期）
@@ -813,7 +833,7 @@ export default function AiOgiriApp() {
 
           setSinglePlayerHand(newHand);
           setCardDeck(nextDeck);
-          syncActiveCards([newHand], nextDeck);
+          syncCardsWrapper([newHand], nextDeck);
       }
 
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
@@ -827,6 +847,7 @@ export default function AiOgiriApp() {
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
+          // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
       }
@@ -902,7 +923,7 @@ export default function AiOgiriApp() {
       setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
       const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
       setSinglePlayerHand(filledHand); setCardDeck(filledDeck); setHasHandRerolled(true);
-      syncActiveCards([filledHand], filledDeck);
+      syncCardsWrapper([filledHand], filledDeck);
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
       if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
   };
@@ -1005,56 +1026,8 @@ export default function AiOgiriApp() {
   };
 
   const handleSingleSubmitManual = async (text) => {
-    if (!text || isJudging) return;
-    playSound('decision');
-    setIsTimerRunning(false);
-    setIsJudging(true);
-    if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
-
-    const result = await fetchAiJudgment(currentTopic, text, true);
-    if (result && result.isInappropriate) {
-        playSound('timeup');
-        alert("⚠️ AI判定：不適切な表現が含まれています。");
-        setIsJudging(false);
-        setIsTimerRunning(true);
-        return;
-    }
-    setSingleSelectedCard(text);
-    setGamePhase('judging');
-    let score = 0;
-    if (result) {
-        setAiComment(formatAiComment(result.comment));
-        score = result.score;
-        if (result.radar) updateUserStats(score, result.radar);
-        if (score >= HALL_OF_FAME_THRESHOLD) {
-            saveToHallOfFame({
-                topic: currentTopic,
-                answer: text,
-                score: score,
-                comment: result.comment,
-                radar: result.radar,
-                player: userName,
-                date: new Date().toLocaleDateString()
-            });
-            saveLearnedAnswer(text);
-        } else if (score >= HIGH_SCORE_THRESHOLD) {
-            saveLearnedAnswer(text);
-        }
-    } else {
-        score = Math.floor(Math.random() * 40) + 40;
-        setAiComment(formatAiComment(FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)]));
-    }
-    setPlayers(prev => {
-        const newP = [...prev];
-        newP[0].score += score;
-        if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) setIsSurvivalGameOver(true);
-        if (gameConfig.singleMode === 'time_attack' && newP[0].score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now());
-        return newP;
-    });
-    setSelectedSubmission({ answerText: text, score, radar: result?.radar });
-    playSound('result');
-    setIsJudging(false);
-    setGamePhase('result');
+    // 自由回答用だが、submitAnswerに統合するためラッパーとして機能
+    submitAnswer(text, true);
   };
 
   const handleTopicFeedback = (isGood) => {
@@ -1199,7 +1172,7 @@ export default function AiOgiriApp() {
                             <div className="flex gap-2">
                                 <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
                                 <button onClick={() => {
-                                    if(gameConfig.mode==='single') handleSingleSubmitManual(manualAnswerInput);
+                                    if(gameConfig.mode==='single') submitAnswer(manualAnswerInput, true);
                                     else handleMultiSubmit(manualAnswerInput);
                                 }} disabled={!manualAnswerInput.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
                             </div>
@@ -1209,7 +1182,11 @@ export default function AiOgiriApp() {
                 
                 {gamePhase === 'judging' && (
                    gameConfig.mode === 'single' ? (
-                       <div className="text-center py-20"><Sparkles className="w-16 h-16 text-amber-500 animate-pulse mx-auto mb-4"/><h3 className="text-2xl font-bold text-slate-800">審査中...</h3></div>
+                       <div className="text-center py-20">
+                           <Sparkles className="w-16 h-16 text-amber-500 animate-pulse mx-auto mb-4"/>
+                           <h3 className="text-2xl font-bold text-slate-800 mb-2">審査中...</h3>
+                           <p className="text-sm text-slate-500">あなたの回答: <span className="font-bold text-indigo-600">{singleSelectedCard}</span></p>
+                       </div>
                    ) : (
                        <div className="animate-in fade-in">
                            <h2 className="text-center font-bold mb-4">{players[masterIndex].name}さんが選んでください</h2>
@@ -1227,7 +1204,8 @@ export default function AiOgiriApp() {
                     <div className="text-center animate-in zoom-in">
                         <div className="bg-white p-6 rounded-3xl shadow-xl mb-6">
                             <p className="text-sm text-slate-400 font-bold mb-2">お題</p>
-                            <p className="text-lg font-bold mb-6">{currentTopic.replace('{placeholder}', '___')}</p>
+                            {/* お題表示をシンプルに */}
+                            <p className="text-lg font-bold mb-6">{currentTopic}</p>
                             <div className="border-t border-slate-100 my-4"></div>
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
