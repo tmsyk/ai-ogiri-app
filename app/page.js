@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.49";
+const APP_VERSION = "Ver 0.50";
 const UPDATE_LOGS = [
+  { version: "Ver 0.50", date: "2026/01/26", content: ["背景画像(background.png)の読み込みに対応"] },
   { version: "Ver 0.49", date: "2026/01/26", content: ["回答カードの表示不具合を修正", "手札補充時の重複チェックを強化"] },
   { version: "Ver 0.48", date: "2026/01/26", content: ["回答カードが表示されない不具合を修正"] },
-  { version: "Ver 0.47", date: "2026/01/26", content: ["座布団表示エラー(ZabutonStack)を修正", "お題が表示されない問題を修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -768,9 +768,14 @@ export default function AiOgiriApp() {
     2. 架空の長すぎる造語（例：〇〇の〇〇な〇〇）は禁止。
     3. シンプルだが、お題と組み合わせると面白くなる言葉。
     4. ジャンルはバラバラに（食べ物、人物、場所、道具、抽象概念など）。
-    出力: {"answers": ["...", ...]}`;
+    5. インパクトの強い言葉には "rarity": "rare" を、それ以外は "normal" を付与。
+    出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`;
     const res = await callGemini(prompt);
-    const uniqueAnswers = getUniqueCards(res?.answers, usedSet);
+    // レスポンスが単純な文字列配列の場合のフォールバック
+    const rawAnswers = res?.answers || [];
+    const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a);
+    
+    const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet);
     if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
     return uniqueAnswers;
   };
@@ -818,7 +823,7 @@ export default function AiOgiriApp() {
     }
     // プールから補充
     if (remaining > 0 && learned.cardPool?.length > 0) {
-      const poolCards = getUniqueCards(learned.cardPool, usedSet).slice(0, remaining);
+      const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t, rarity: 'normal' })), usedSet).slice(0, remaining);
       if (poolCards.length > 0) {
         registerActiveCards(poolCards);
         collected.push(...poolCards);
@@ -980,10 +985,12 @@ export default function AiOgiriApp() {
       setSingleSelectedCard(text);
       setGamePhase('judging');
       
+      let currentHand = [...singlePlayerHand];
+
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
       if (!isManual && gameConfig.mode === 'single') {
           // 使ったカードを手札から消す
-          const currentHand = singlePlayerHand.filter(c => (typeof c === 'string' ? c : c.text) !== text);
+          currentHand = singlePlayerHand.filter(c => (typeof c === 'string' ? c : c.text) !== text);
           
           let nextDeck = [...cardDeck];
           
@@ -1238,8 +1245,16 @@ export default function AiOgiriApp() {
 
   // --- Render (View) ---
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
-       <header className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-30">
+    <div 
+      className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20"
+      style={{
+        backgroundImage: 'url("/background.png")',
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        backgroundAttachment: 'fixed'
+      }}
+    >
+       <header className="bg-white/90 backdrop-blur-sm border-b p-4 flex justify-between items-center sticky top-0 z-30">
           <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
           <div className="flex gap-2">
               <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
@@ -1250,9 +1265,9 @@ export default function AiOgiriApp() {
        <main className="max-w-2xl mx-auto p-4">
           {appMode === 'title' && (
               <div className="text-center py-10 animate-in fade-in">
-                  <div className="w-24 h-24 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6"><Sparkles className="w-12 h-12 text-indigo-600"/></div>
-                  <h1 className="text-4xl font-black mb-2">AI大喜利</h1>
-                  <p className="text-slate-500 mb-8">{APP_VERSION}<br/><span className="text-xs text-indigo-500">Powered by Gemini</span></p>
+                  <div className="w-24 h-24 bg-indigo-100 rounded-full flex items-center justify-center mx-auto mb-6 shadow-lg border-4 border-white"><img src="/icon.png" alt="Logo" className="w-16 h-16 object-contain" onError={(e) => e.target.style.display='none'} /><Sparkles className="w-10 h-10 text-indigo-600 absolute" style={{display: 'none'}}/></div>
+                  <h1 className="text-4xl font-black mb-2 drop-shadow-sm text-slate-800">AI大喜利</h1>
+                  <p className="text-slate-500 mb-8 font-bold">{APP_VERSION}<br/><span className="text-xs text-indigo-500 font-normal">Powered by Gemini</span></p>
                   
                   <div className="space-y-4 mb-8">
                       <button onClick={() => { playSound('decision'); setGameConfig({...gameConfig, mode: 'single'}); setAppMode('setup'); }} className="w-full p-4 bg-white border-2 rounded-xl font-bold shadow-sm flex items-center justify-center gap-2 hover:border-indigo-500 transition-all"><User/> 一人で遊ぶ</button>
@@ -1260,18 +1275,18 @@ export default function AiOgiriApp() {
                   </div>
 
                   <div className="flex justify-center gap-4">
-                      <button onClick={() => setActiveModal('data')} className="text-xs flex flex-col items-center gap-1 text-slate-500"><Activity/>マイデータ</button>
-                      <button onClick={() => setActiveModal('rule')} className="text-xs flex flex-col items-center gap-1 text-slate-500"><BookOpen/>ルール</button>
-                      <button onClick={() => setActiveModal('hall')} className="text-xs flex flex-col items-center gap-1 text-yellow-600"><Crown/>殿堂入り</button>
-                      <button onClick={() => setActiveModal('update')} className="text-xs flex flex-col items-center gap-1 text-slate-500"><History/>更新情報</button>
+                      <button onClick={() => setActiveModal('data')} className="text-xs flex flex-col items-center gap-1 text-slate-500 bg-white/50 p-2 rounded-lg"><Activity/>マイデータ</button>
+                      <button onClick={() => setActiveModal('rule')} className="text-xs flex flex-col items-center gap-1 text-slate-500 bg-white/50 p-2 rounded-lg"><BookOpen/>ルール</button>
+                      <button onClick={() => setActiveModal('hall')} className="text-xs flex flex-col items-center gap-1 text-yellow-600 bg-white/50 p-2 rounded-lg"><Crown/>殿堂入り</button>
+                      <button onClick={() => setActiveModal('update')} className="text-xs flex flex-col items-center gap-1 text-slate-500 bg-white/50 p-2 rounded-lg"><History/>更新情報</button>
                   </div>
               </div>
           )}
 
           {appMode === 'setup' && (
               <div className="py-6 animate-in slide-in-from-right">
-                  <h2 className="text-2xl font-bold mb-6 text-center">設定</h2>
-                  <div className="bg-white p-6 rounded-2xl shadow-sm mb-6">
+                  <h2 className="text-2xl font-bold mb-6 text-center text-slate-800 drop-shadow-sm">設定</h2>
+                  <div className="bg-white/90 backdrop-blur-sm p-6 rounded-2xl shadow-sm mb-6">
                       {gameConfig.mode === 'single' ? (
                           <div className="space-y-3">
                               {['score_attack', 'survival', 'time_attack', 'freestyle'].map(m => (
@@ -1294,7 +1309,7 @@ export default function AiOgiriApp() {
 
           {appMode === 'game' && (
               <>
-                <div className="flex justify-between items-center mb-4 text-xs font-bold text-slate-500">
+                <div className="flex justify-between items-center mb-4 text-xs font-bold text-slate-500 bg-white/80 p-2 rounded-full backdrop-blur-sm">
                     <span>{gameConfig.mode === 'single' ? gameConfig.singleMode.toUpperCase() : 'MULTI PLAY'}</span>
                     <span>Round {currentRound}</span>
                     {gameConfig.singleMode === 'time_attack' && <span className="text-blue-600">{answerCount}回</span>}
@@ -1309,7 +1324,7 @@ export default function AiOgiriApp() {
                 )}
 
                 {gamePhase === 'master_topic' && (
-                    <div className="bg-white p-6 rounded-2xl shadow-sm animate-in fade-in">
+                    <div className="bg-white/95 backdrop-blur-sm p-6 rounded-2xl shadow-sm animate-in fade-in">
                         <h2 className="text-xl font-bold mb-4 text-center">お題を決めてください</h2>
                         <textarea value={manualTopicInput} onChange={(e) => setManualTopicInput(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl mb-4 border" placeholder="例：冷蔵庫を開けたら..." />
                         <div className="flex gap-2">
@@ -1351,7 +1366,7 @@ export default function AiOgiriApp() {
                             ))}
                         </div>
                         
-                        <div className="bg-white p-4 rounded-xl shadow-sm">
+                        <div className="bg-white/95 backdrop-blur-sm p-4 rounded-xl shadow-sm">
                             <p className="font-bold text-xs text-slate-400 mb-2">自由に回答</p>
                             <div className="flex gap-2">
                                 <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
@@ -1386,7 +1401,7 @@ export default function AiOgiriApp() {
 
                 {gamePhase === 'result' && (
                     <div className="text-center animate-in zoom-in">
-                        <div className="bg-white p-6 rounded-3xl shadow-xl mb-6">
+                        <div className="bg-white/95 backdrop-blur-sm p-6 rounded-3xl shadow-xl mb-6">
                             <p className="text-sm text-slate-400 font-bold mb-2">お題</p>
                             {/* お題表示をシンプルに */}
                             <p className="text-lg font-bold mb-6">{currentTopic}</p>
@@ -1394,6 +1409,13 @@ export default function AiOgiriApp() {
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
                             
+                            {/* 座布団アニメーション */}
+                            {gameConfig.mode === 'single' && result?.zabuton > 0 && (
+                                <div className="mb-4">
+                                   <ZabutonStack count={result.zabuton} />
+                                </div>
+                            )}
+
                             {gameConfig.mode === 'single' ? (
                                 <>
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
