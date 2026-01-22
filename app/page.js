@@ -13,8 +13,9 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.47";
+const APP_VERSION = "Ver 0.48";
 const UPDATE_LOGS = [
+  { version: "Ver 0.48", date: "2026/01/26", content: ["回答カードが表示されない不具合を修正"] },
   { version: "Ver 0.47", date: "2026/01/26", content: ["座布団表示エラー(ZabutonStack)を修正", "お題が表示されない問題を修正"] },
   { version: "Ver 0.46", date: "2026/01/26", content: ["お題作成ボタンのエラーを修正", "入力フォームの属性を追加"] },
   { version: "Ver 0.45", date: "2026/01/26", content: ["お題作成画面のAIボタン不具合を修正", "レーダーチャートの0点位置を調整し視認性向上"] },
@@ -142,9 +143,25 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
   </div>
 );
 
-const Card = ({ text, isSelected, onClick, disabled }) => (
-  <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
-);
+const Card = ({ card, isSelected, onClick, disabled }) => {
+  const text = typeof card === 'string' ? card : card.text;
+  const isRare = typeof card !== 'string' && card.rarity === 'rare';
+  
+  return (
+    <button 
+      onClick={() => !disabled && onClick(text)} 
+      disabled={disabled} 
+      className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 
+      ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} 
+      ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}
+      ${isRare ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100 ring-1 ring-yellow-200' : ''}
+      `}
+    >
+      {isRare && <span className="absolute top-1 right-1 text-[10px] text-yellow-600">★</span>}
+      {text}
+    </button>
+  );
+};
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
@@ -713,19 +730,30 @@ export default function AiOgiriApp() {
     return uniqueAnswers;
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
+    const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を0-5で厳正に評価（3が標準）";
+    
+    // 審査員の性格によるプロンプト分岐
+    let personalityPrompt = "";
+    switch(judgePersonality) {
+        case 'strict': personalityPrompt = "あなたは超激辛審査員です。どんな回答も厳しく批判し、採点は-20点してください。"; break;
+        case 'gal': personalityPrompt = "あなたはギャルです。「ウケる」「それな」などの若者言葉でノリよく採点してください。"; break;
+        case 'chuuni': personalityPrompt = "あなたは厨二病です。闇の炎や禁断の力に例えて、難解かつ大げさにコメントしてください。"; break;
+        default: personalityPrompt = "あなたはノリの良いお笑い審査員です。"; break;
+    }
+
     const p = isManual
-      ? `あなたはノリの良いお笑い審査員です。以下のお題と回答に対し、点数（0-100）と、面白いツッコミ（関西弁推奨）を返してください。
+      ? `${personalityPrompt} 以下のお題と回答に対し、厳正な審査を行ってください。
 お題: ${topic}
 回答: ${answer}
 
 重要ルール:
-1. たとえ回答が短かったり意味不明でも、AIのエラーメッセージのような「評価できません」は絶対に禁止。無理やりこじつけて面白おかしくツッコんでください。
-2. 点数は甘めにつけてください（基本60点以上）。
+1. 回答が成立していない場合は低い点数をつけて構いませんが、エラーメッセージではなくツッコミを入れてください。
+2. 採点は甘くせず、面白さをシビアに評価してください（基準は5段階評価の3）。
 3. ツッコミは15文字程度の短い一言で。
-4. 5段階評価（1-5）も行ってください。
+4. ${radarDesc}
 
 出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 レーダーチャートの合計(0-25)に基づいて算出されるため、各項目を0-5で厳正に評価。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
     return await callGemini(p);
   };
 
@@ -942,7 +970,18 @@ export default function AiOgiriApp() {
       try {
         if (isAiActive) {
             const res = await fetchAiJudgment(currentTopic, text, isManual);
-            if (res) { score = res.score; comment = res.comment; radar = res.radar; }
+            if (res) {
+                // レーダーチャートの合計値からスコアを算出（各5点満点×5項目＝25点満点 → ×4で100点満点）
+                const totalRadarScore = 
+                    (res.radar.surprise || 0) + 
+                    (res.radar.context || 0) + 
+                    (res.radar.punchline || 0) + 
+                    (res.radar.humor || 0) + 
+                    (res.radar.intelligence || 0);
+                score = totalRadarScore * 4;
+                comment = res.comment; 
+                radar = res.radar; 
+            }
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
@@ -1370,8 +1409,8 @@ export default function AiOgiriApp() {
                                 </div>
                              )}
                              {gameRadars.length > 0 && (
-                                <div className="mb-8 flex justify-center flex-col items-center mt-10">
-                                    <p className="text-sm font-bold text-slate-500 mb-6">今回の平均評価</p>
+                                <div className="mb-8 flex justify-center flex-col items-center mt-4">
+                                    <p className="text-sm font-bold text-slate-500 mb-4">今回の平均評価</p>
                                     <RadarChart data={getFinalGameRadar()} size={180} maxValue={5} />
                                 </div>
                              )}
