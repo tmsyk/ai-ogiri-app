@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.51";
+const APP_VERSION = "Ver 0.52";
 const UPDATE_LOGS = [
+  { version: "Ver 0.52", date: "2026/01/26", content: ["お題作成ボタンの関数名エラーを修正", "入力フォームの警告に対応"] },
   { version: "Ver 0.51", date: "2026/01/26", content: ["タイトル画面のアイコンサイズを調整"] },
   { version: "Ver 0.50", date: "2026/01/26", content: ["背景画像(background.png)の読み込みに対応"] },
-  { version: "Ver 0.49", date: "2026/01/26", content: ["回答カードの表示不具合を修正", "手札補充時の重複チェックを強化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -1332,9 +1332,9 @@ export default function AiOgiriApp() {
                 {gamePhase === 'master_topic' && (
                     <div className="bg-white/95 backdrop-blur-sm p-6 rounded-2xl shadow-sm animate-in fade-in">
                         <h2 className="text-xl font-bold mb-4 text-center">お題を決めてください</h2>
-                        <textarea value={manualTopicInput} onChange={(e) => setManualTopicInput(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl mb-4 border" placeholder="例：冷蔵庫を開けたら..." />
+                        <textarea id="topicInput" name="topicInput" value={manualTopicInput} onChange={(e) => setManualTopicInput(e.target.value)} className="w-full p-3 bg-slate-50 rounded-xl mb-4 border" placeholder="例：冷蔵庫を開けたら..." />
                         <div className="flex gap-2">
-                            <button onClick={() => generateAiTopic()} disabled={isGeneratingTopic} className="flex-1 py-3 bg-indigo-100 text-indigo-700 font-bold rounded-xl flex justify-center items-center gap-2"><Wand2 className="w-4 h-4"/> AI作成</button>
+                            <button onClick={() => generateTopic()} disabled={isGeneratingTopic} className="flex-1 py-3 bg-indigo-100 text-indigo-700 font-bold rounded-xl flex justify-center items-center gap-2"><Wand2 className="w-4 h-4"/> AI作成</button>
                             <button onClick={confirmTopicAI} className="flex-1 py-3 bg-slate-800 text-white font-bold rounded-xl">決定</button>
                         </div>
                     </div>
@@ -1375,7 +1375,7 @@ export default function AiOgiriApp() {
                         <div className="bg-white/95 backdrop-blur-sm p-4 rounded-xl shadow-sm">
                             <p className="font-bold text-xs text-slate-400 mb-2">自由に回答</p>
                             <div className="flex gap-2">
-                                <input value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
+                                <input id="answerInput" name="answerInput" value={manualAnswerInput} onChange={(e) => setManualAnswerInput(e.target.value)} className="flex-1 p-2 bg-slate-50 rounded border" placeholder="回答を入力..." />
                                 <button onClick={() => {
                                     if(gameConfig.mode==='single') handleSingleSubmitManual(manualAnswerInput);
                                     else handleMultiSubmit(manualAnswerInput);
