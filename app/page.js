@@ -13,12 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.48";
+const APP_VERSION = "Ver 0.49";
 const UPDATE_LOGS = [
+  { version: "Ver 0.49", date: "2026/01/26", content: ["回答カードの表示不具合を修正", "手札補充時の重複チェックを強化"] },
   { version: "Ver 0.48", date: "2026/01/26", content: ["回答カードが表示されない不具合を修正"] },
   { version: "Ver 0.47", date: "2026/01/26", content: ["座布団表示エラー(ZabutonStack)を修正", "お題が表示されない問題を修正"] },
-  { version: "Ver 0.46", date: "2026/01/26", content: ["お題作成ボタンのエラーを修正", "入力フォームの属性を追加"] },
-  { version: "Ver 0.45", date: "2026/01/26", content: ["お題作成画面のAIボタン不具合を修正", "レーダーチャートの0点位置を調整し視認性向上"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -56,13 +55,58 @@ const FALLBACK_TOPICS = [
 ];
 
 const FALLBACK_ANSWERS = [
-  "賞味期限切れのプリン", "隣の家のポチ", "確定申告書", "お母さんの手作り弁当", "爆発寸前のダイナマイト",
-  "聖徳太子の肖像画", "伝説の剣", "使いかけの消しゴム", "大量のわさび", "自分探しの旅", "闇の組織",
-  "タピオカ", "空飛ぶスパゲッティ", "5000兆円", "筋肉痛", "反抗期", "黒歴史", "パスワード", "ひざ小僧",
-  "絶対に押してはいけないボタン", "全裸の銅像", "生き別れの兄", "トイレットペーパーの芯", "3日前のおにぎり", "オカンの小言",
-  "虚無", "宇宙の真理", "生乾きの靴下", "高すぎるツボ", "怪しい勧誘", "激辛麻婆豆腐", "猫の肉球", "壊れたラジオ",
-  "深夜のラブレター", "既読スルー", "アフロヘアー", "筋肉", "プロテイン", "札束風呂", "へそくり", "火星人",
-  "透明人間", "サイズ違いの靴", "毒リンゴ", "マッチョな妖精", "空飛ぶサメ", "忍者", "侍", "YouTuber", "AI", "バグ", "404 Error"
+  { text: "賞味期限切れのプリン", rarity: "normal" },
+  { text: "隣の家のポチ", rarity: "normal" },
+  { text: "確定申告書", rarity: "normal" },
+  { text: "お母さんの手作り弁当", rarity: "normal" },
+  { text: "爆発寸前のダイナマイト", rarity: "rare" },
+  { text: "聖徳太子の肖像画", rarity: "normal" },
+  { text: "伝説の剣", rarity: "rare" },
+  { text: "使いかけの消しゴム", rarity: "normal" },
+  { text: "大量のわさび", rarity: "normal" },
+  { text: "自分探しの旅", rarity: "normal" },
+  { text: "闇の組織", rarity: "rare" },
+  { text: "タピオカ", rarity: "normal" },
+  { text: "空飛ぶスパゲッティ", rarity: "rare" },
+  { text: "5000兆円", rarity: "rare" },
+  { text: "筋肉痛", rarity: "normal" },
+  { text: "反抗期", rarity: "normal" },
+  { text: "黒歴史", rarity: "normal" },
+  { text: "パスワード", rarity: "normal" },
+  { text: "ひざ小僧", rarity: "normal" },
+  { text: "絶対に押してはいけないボタン", rarity: "rare" },
+  { text: "全裸の銅像", rarity: "rare" },
+  { text: "生き別れの兄", rarity: "normal" },
+  { text: "トイレットペーパーの芯", rarity: "normal" },
+  { text: "3日前のおにぎり", rarity: "normal" },
+  { text: "オカンの小言", rarity: "normal" },
+  { text: "虚無", rarity: "rare" },
+  { text: "宇宙の真理", rarity: "rare" },
+  { text: "生乾きの靴下", rarity: "normal" },
+  { text: "高すぎるツボ", rarity: "normal" },
+  { text: "怪しい勧誘", rarity: "normal" },
+  { text: "激辛麻婆豆腐", rarity: "normal" },
+  { text: "猫の肉球", rarity: "normal" },
+  { text: "壊れたラジオ", rarity: "normal" },
+  { text: "深夜のラブレター", rarity: "normal" },
+  { text: "既読スルー", rarity: "normal" },
+  { text: "アフロヘアー", rarity: "normal" },
+  { text: "筋肉", rarity: "normal" },
+  { text: "プロテイン", rarity: "normal" },
+  { text: "札束風呂", rarity: "rare" },
+  { text: "へそくり", rarity: "normal" },
+  { text: "火星人", rarity: "rare" },
+  { text: "透明人間", rarity: "rare" },
+  { text: "サイズ違いの靴", rarity: "normal" },
+  { text: "毒リンゴ", rarity: "normal" },
+  { text: "マッチョな妖精", rarity: "rare" },
+  { text: "空飛ぶサメ", rarity: "rare" },
+  { text: "忍者", rarity: "normal" },
+  { text: "侍", rarity: "normal" },
+  { text: "YouTuber", rarity: "normal" },
+  { text: "AI", rarity: "normal" },
+  { text: "バグ", rarity: "normal" },
+  { text: "404 Error", rarity: "normal" }
 ];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
@@ -144,14 +188,15 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
 );
 
 const Card = ({ card, isSelected, onClick, disabled }) => {
-  const text = typeof card === 'string' ? card : card.text;
+  if (!card) return null;
+  const text = typeof card === 'string' ? card : (card.text || "???");
   const isRare = typeof card !== 'string' && card.rarity === 'rare';
   
   return (
     <button 
       onClick={() => !disabled && onClick(text)} 
       disabled={disabled} 
-      className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 
+      className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden 
       ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} 
       ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}
       ${isRare ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100 ring-1 ring-yellow-200' : ''}
@@ -209,10 +254,10 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   );
 };
 
-// 復活: ZabutonStack コンポーネント
+// ZabutonStack コンポーネント
 const ZabutonStack = ({ count }) => {
-  const stack = Math.min(count, 20); // 最大20枚まで表示
-  const isGold = count >= 90; // スコアが90点以上なら座布団9枚以上のはずだが、ここではスコアベースの判定ロジックに合わせる
+  const stack = Math.min(count, 20); 
+  const isGold = count >= 90; 
   
   return (
     <div className="flex flex-col items-center justify-end h-24 w-full relative mb-4">
@@ -812,8 +857,9 @@ export default function AiOgiriApp() {
       const drawCard = nextDeck.shift();
       if (!drawCard) break;
       
-      // 手札に重複がなければ追加
-      if (!nextHand.includes(drawCard)) {
+      // 手札に重複がなければ追加（テキスト比較）
+      const drawText = typeof drawCard === 'string' ? drawCard : drawCard.text;
+      if (!nextHand.some(c => (typeof c === 'string' ? c : c.text) === drawText)) {
           nextHand.push(drawCard);
       }
     }
@@ -925,7 +971,8 @@ export default function AiOgiriApp() {
   const handleTimeUp = () => {
       playSound('timeup');
       const card = singlePlayerHand[0] || "時間切れ";
-      submitAnswer(card);
+      const cardText = typeof card === 'string' ? card : card.text;
+      submitAnswer(cardText);
   };
 
   const submitAnswer = async (text, isManual = false) => {
@@ -933,12 +980,10 @@ export default function AiOgiriApp() {
       setSingleSelectedCard(text);
       setGamePhase('judging');
       
-      let currentHand = [...singlePlayerHand];
-
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
       if (!isManual && gameConfig.mode === 'single') {
           // 使ったカードを手札から消す
-          currentHand = singlePlayerHand.filter(c => c.text !== text);
+          const currentHand = singlePlayerHand.filter(c => (typeof c === 'string' ? c : c.text) !== text);
           
           let nextDeck = [...cardDeck];
           
@@ -1069,7 +1114,7 @@ export default function AiOgiriApp() {
   
   const handleMultiSubmit = (text) => {
       setSubmissions(prev => [...prev, { playerId: players[turnPlayerIndex].id, answerText: text }]);
-      setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => c.text !== text) } : p));
+      setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => (typeof c === 'string' ? c : c.text) !== text) } : p));
       setManualAnswerInput('');
       const nextTurn = (turnPlayerIndex + 1) % players.length;
       if (nextTurn === masterIndex) { 
@@ -1409,8 +1454,8 @@ export default function AiOgiriApp() {
                                 </div>
                              )}
                              {gameRadars.length > 0 && (
-                                <div className="mb-8 flex justify-center flex-col items-center mt-4">
-                                    <p className="text-sm font-bold text-slate-500 mb-4">今回の平均評価</p>
+                                <div className="mb-8 flex justify-center flex-col items-center mt-10">
+                                    <p className="text-sm font-bold text-slate-500 mb-6">今回の平均評価</p>
                                     <RadarChart data={getFinalGameRadar()} size={180} maxValue={5} />
                                 </div>
                              )}
