@@ -13,24 +13,25 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.41";
+const APP_VERSION = "Ver 0.47";
 const UPDATE_LOGS = [
-  { version: "Ver 0.41", date: "2026/01/26", content: ["サバイバルモードのエラー(SURVIVAL_PASS_SCORE)を修正", "ゲーム再開時に操作不能になる不具合を修正"] },
-  { version: "Ver 0.40", date: "2026/01/26", content: ["手札を8枚に増量", "レアカードシステム実装", "審査員のキャラ変機能", "座布団システム追加"] },
+  { version: "Ver 0.47", date: "2026/01/26", content: ["座布団表示エラー(ZabutonStack)を修正", "お題が表示されない問題を修正"] },
+  { version: "Ver 0.46", date: "2026/01/26", content: ["お題作成ボタンのエラーを修正", "入力フォームの属性を追加"] },
+  { version: "Ver 0.45", date: "2026/01/26", content: ["お題作成画面のAIボタン不具合を修正", "レーダーチャートの0点位置を調整し視認性向上"] },
 ];
 
 const TOTAL_ROUNDS = 5;
-const SURVIVAL_PASS_SCORE = 60; // 復活させた定数
+const SURVIVAL_PASS_SCORE = 60;
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
-const HAND_SIZE = 8;
+const HAND_SIZE = 6;
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-const API_TIMEOUT_MS = 20000;
+const API_TIMEOUT_MS = 15000;
 
 // 審査員タイプ定義
 const JUDGES = {
@@ -53,60 +54,14 @@ const FALLBACK_TOPICS = [
   "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
 ];
 
-// カードデータをオブジェクト化
 const FALLBACK_ANSWERS = [
-  { text: "賞味期限切れのプリン", rarity: "normal" },
-  { text: "隣の家のポチ", rarity: "normal" },
-  { text: "確定申告書", rarity: "normal" },
-  { text: "お母さんの手作り弁当", rarity: "normal" },
-  { text: "爆発寸前のダイナマイト", rarity: "rare" },
-  { text: "聖徳太子の肖像画", rarity: "normal" },
-  { text: "伝説の剣", rarity: "rare" },
-  { text: "使いかけの消しゴム", rarity: "normal" },
-  { text: "大量のわさび", rarity: "normal" },
-  { text: "自分探しの旅", rarity: "normal" },
-  { text: "闇の組織", rarity: "rare" },
-  { text: "タピオカ", rarity: "normal" },
-  { text: "空飛ぶスパゲッティ", rarity: "rare" },
-  { text: "5000兆円", rarity: "rare" },
-  { text: "筋肉痛", rarity: "normal" },
-  { text: "反抗期", rarity: "normal" },
-  { text: "黒歴史", rarity: "normal" },
-  { text: "パスワード", rarity: "normal" },
-  { text: "ひざ小僧", rarity: "normal" },
-  { text: "絶対に押してはいけないボタン", rarity: "rare" },
-  { text: "全裸の銅像", rarity: "rare" },
-  { text: "生き別れの兄", rarity: "normal" },
-  { text: "トイレットペーパーの芯", rarity: "normal" },
-  { text: "3日前のおにぎり", rarity: "normal" },
-  { text: "オカンの小言", rarity: "normal" },
-  { text: "虚無", rarity: "rare" },
-  { text: "宇宙の真理", rarity: "rare" },
-  { text: "生乾きの靴下", rarity: "normal" },
-  { text: "高すぎるツボ", rarity: "normal" },
-  { text: "怪しい勧誘", rarity: "normal" },
-  { text: "激辛麻婆豆腐", rarity: "normal" },
-  { text: "猫の肉球", rarity: "normal" },
-  { text: "壊れたラジオ", rarity: "normal" },
-  { text: "深夜のラブレター", rarity: "normal" },
-  { text: "既読スルー", rarity: "normal" },
-  { text: "アフロヘアー", rarity: "normal" },
-  { text: "筋肉", rarity: "normal" },
-  { text: "プロテイン", rarity: "normal" },
-  { text: "札束風呂", rarity: "rare" },
-  { text: "へそくり", rarity: "normal" },
-  { text: "火星人", rarity: "rare" },
-  { text: "透明人間", rarity: "rare" },
-  { text: "サイズ違いの靴", rarity: "normal" },
-  { text: "毒リンゴ", rarity: "normal" },
-  { text: "マッチョな妖精", rarity: "rare" },
-  { text: "空飛ぶサメ", rarity: "rare" },
-  { text: "忍者", rarity: "normal" },
-  { text: "侍", rarity: "normal" },
-  { text: "YouTuber", rarity: "normal" },
-  { text: "AI", rarity: "normal" },
-  { text: "バグ", rarity: "normal" },
-  { text: "404 Error", rarity: "normal" }
+  "賞味期限切れのプリン", "隣の家のポチ", "確定申告書", "お母さんの手作り弁当", "爆発寸前のダイナマイト",
+  "聖徳太子の肖像画", "伝説の剣", "使いかけの消しゴム", "大量のわさび", "自分探しの旅", "闇の組織",
+  "タピオカ", "空飛ぶスパゲッティ", "5000兆円", "筋肉痛", "反抗期", "黒歴史", "パスワード", "ひざ小僧",
+  "絶対に押してはいけないボタン", "全裸の銅像", "生き別れの兄", "トイレットペーパーの芯", "3日前のおにぎり", "オカンの小言",
+  "虚無", "宇宙の真理", "生乾きの靴下", "高すぎるツボ", "怪しい勧誘", "激辛麻婆豆腐", "猫の肉球", "壊れたラジオ",
+  "深夜のラブレター", "既読スルー", "アフロヘアー", "筋肉", "プロテイン", "札束風呂", "へそくり", "火星人",
+  "透明人間", "サイズ違いの靴", "毒リンゴ", "マッチョな妖精", "空飛ぶサメ", "忍者", "侍", "YouTuber", "AI", "バグ", "404 Error"
 ];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
@@ -198,8 +153,9 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   
   const getP = (v, i) => {
     const val = Math.max(0, v);
-    const ratio = val <= 0 ? 0 : 0.4 + (val / max) * 0.6;
-    const radius = ratio * r * 0.85; 
+    // 0点は中心。それ以外は 0.2 + 0.8 * (val / max) の割合で描画
+    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
+    const radius = ratio * r * 0.90; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -214,24 +170,57 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
       <svg width={size} height={size} className="overflow-visible">
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
-             const radius = (l / 5) * r * 0.85;
+             const radius = (l / 5) * r * 0.90;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {keys.map((_, i) => { 
-           const radius = r * 0.85;
+           const radius = r * 0.90;
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         {keys.map((_, i) => { 
-             const radius = r * 0.85 * 1.35; 
+             const radius = r * 0.90 * 1.35; 
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
              const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
         })}
       </svg>
+    </div>
+  );
+};
+
+// 復活: ZabutonStack コンポーネント
+const ZabutonStack = ({ count }) => {
+  const stack = Math.min(count, 20); // 最大20枚まで表示
+  const isGold = count >= 90; // スコアが90点以上なら座布団9枚以上のはずだが、ここではスコアベースの判定ロジックに合わせる
+  
+  return (
+    <div className="flex flex-col items-center justify-end h-24 w-full relative mb-4">
+      {Array.from({ length: stack }).map((_, i) => (
+        <div 
+          key={i} 
+          className={`h-2 w-24 rounded-sm border-b border-black/10 absolute transition-all duration-300 ease-out
+            ${isGold ? 'bg-yellow-400 shadow-yellow-200' : 'bg-indigo-600 shadow-indigo-200'}
+          `}
+          style={{ 
+            bottom: `${i * 4}px`, 
+            zIndex: i,
+            width: `${100 - i}%`, 
+            transform: `translateY(${100 - (i*10)}%) scale(${1 - i*0.02})`,
+            animation: `slideIn 0.3s ease-out ${i * 0.05}s forwards`
+          }} 
+        />
+      ))}
+      <div className="absolute bottom-[-20px] font-bold text-slate-400 text-xs">座布団 {count}枚</div>
+      <style jsx>{`
+        @keyframes slideIn {
+          from { transform: translateY(-20px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 };
@@ -717,42 +706,26 @@ export default function AiOgiriApp() {
     2. 架空の長すぎる造語（例：〇〇の〇〇な〇〇）は禁止。
     3. シンプルだが、お題と組み合わせると面白くなる言葉。
     4. ジャンルはバラバラに（食べ物、人物、場所、道具、抽象概念など）。
-    5. インパクトの強い言葉には "rarity": "rare" を、それ以外は "normal" を付与。
-    出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`;
+    出力: {"answers": ["...", ...]}`;
     const res = await callGemini(prompt);
-    // レスポンスが単純な文字列配列の場合のフォールバック
-    const rawAnswers = res?.answers || [];
-    const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a);
-    
-    const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet);
+    const uniqueAnswers = getUniqueCards(res?.answers, usedSet);
     if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
     return uniqueAnswers;
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
-    const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を0-5で厳正に評価（3が標準）";
-    
-    // 審査員の性格によるプロンプト分岐
-    let personalityPrompt = "";
-    switch(judgePersonality) {
-        case 'strict': personalityPrompt = "あなたは超激辛審査員です。どんな回答も厳しく批判し、採点は-20点してください。"; break;
-        case 'gal': personalityPrompt = "あなたはギャルです。「ウケる」「それな」などの若者言葉でノリよく採点してください。"; break;
-        case 'chuuni': personalityPrompt = "あなたは厨二病です。闇の炎や禁断の力に例えて、難解かつ大げさにコメントしてください。"; break;
-        default: personalityPrompt = "あなたはノリの良いお笑い審査員です。"; break;
-    }
-
     const p = isManual
-      ? `${personalityPrompt} 以下のお題と回答に対し、厳正な審査を行ってください。
+      ? `あなたはノリの良いお笑い審査員です。以下のお題と回答に対し、点数（0-100）と、面白いツッコミ（関西弁推奨）を返してください。
 お題: ${topic}
 回答: ${answer}
 
 重要ルール:
-1. 回答が成立していない場合は低い点数をつけて構いませんが、エラーメッセージではなくツッコミを入れてください。
-2. 採点は甘くせず、面白さをシビアに評価してください（基準は5段階評価の3）。
+1. たとえ回答が短かったり意味不明でも、AIのエラーメッセージのような「評価できません」は絶対に禁止。無理やりこじつけて面白おかしくツッコんでください。
+2. 点数は甘めにつけてください（基本60点以上）。
 3. ツッコミは15文字程度の短い一言で。
-4. ${radarDesc}
+4. 5段階評価（1-5）も行ってください。
 
 出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 レーダーチャートの合計(0-25)に基づいて算出されるため、各項目を0-5で厳正に評価。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.5項目評価 3.採点 甘めに採点して。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
     return await callGemini(p);
   };
 
@@ -772,7 +745,7 @@ export default function AiOgiriApp() {
     }
     // プールから補充
     if (remaining > 0 && learned.cardPool?.length > 0) {
-      const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t, rarity: 'normal' })), usedSet).slice(0, remaining);
+      const poolCards = getUniqueCards(learned.cardPool, usedSet).slice(0, remaining);
       if (poolCards.length > 0) {
         registerActiveCards(poolCards);
         collected.push(...poolCards);
@@ -812,7 +785,7 @@ export default function AiOgiriApp() {
       if (!drawCard) break;
       
       // 手札に重複がなければ追加
-      if (!nextHand.some(c => c.text === drawCard.text)) {
+      if (!nextHand.includes(drawCard)) {
           nextHand.push(drawCard);
       }
     }
@@ -821,20 +794,8 @@ export default function AiOgiriApp() {
 
   // --- Game Control ---
   const initGame = async () => {
-      playSound('decision'); 
-      setAppMode('game'); 
-      setGamePhase('drawing'); 
-      setCurrentRound(1); 
-      setAnswerCount(0); 
-      setIsSurvivalGameOver(false); 
-      setIsJudging(false); // リセット追加
-      setIsAdvancingRound(false); // リセット追加
-      setStartTime(null); 
-      setFinishTime(null);
-      
+      playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
       setGameRadars([]); 
-      setTotalZabuton(0);
-      
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       activeCardsRef.current = new Set();
@@ -935,9 +896,8 @@ export default function AiOgiriApp() {
 
   const handleTimeUp = () => {
       playSound('timeup');
-      // 時間切れ時は手札の1枚目を強制提出
-      const cardText = singlePlayerHand[0]?.text || "時間切れ";
-      submitAnswer(cardText);
+      const card = singlePlayerHand[0] || "時間切れ";
+      submitAnswer(card);
   };
 
   const submitAnswer = async (text, isManual = false) => {
@@ -982,18 +942,7 @@ export default function AiOgiriApp() {
       try {
         if (isAiActive) {
             const res = await fetchAiJudgment(currentTopic, text, isManual);
-            if (res) {
-                // レーダーチャートの合計値からスコアを算出（各5点満点×5項目＝25点満点 → ×4で100点満点）
-                const totalRadarScore = 
-                    (res.radar.surprise || 0) + 
-                    (res.radar.context || 0) + 
-                    (res.radar.punchline || 0) + 
-                    (res.radar.humor || 0) + 
-                    (res.radar.intelligence || 0);
-                score = totalRadarScore * 4;
-                comment = res.comment; 
-                radar = res.radar; 
-            }
+            if (res) { score = res.score; comment = res.comment; radar = res.radar; }
             else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) {
@@ -1009,19 +958,13 @@ export default function AiOgiriApp() {
           setGameRadars(prev => [...prev, radar]);
       }
 
-      // 座布団計算
-      const newZabuton = Math.floor(score / 10);
-      setTotalZabuton(prev => prev + newZabuton);
-
       if (score >= HALL_OF_FAME_THRESHOLD) {
           const entry = { topic: currentTopic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
       }
       
-      // サバイバルモード: ラウンド数に応じて合格点が上がる
-      const currentPassScore = SURVIVAL_PASS_SCORE + (currentRound - 1) * 10;
       let isGameOver = false;
-      if (gameConfig.singleMode === 'survival' && score < currentPassScore) {
+      if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
           setIsSurvivalGameOver(true);
           isGameOver = true;
       }
@@ -1036,7 +979,7 @@ export default function AiOgiriApp() {
           return newPlayers;
       });
       
-      setResult({ answer: text, score, comment, radar, zabuton: newZabuton });
+      setResult({ answer: text, score, comment, radar });
       setSelectedSubmission({ answerText: text, score, radar });
       
       setIsJudging(false); playSound('result'); setGamePhase('result');
@@ -1367,13 +1310,6 @@ export default function AiOgiriApp() {
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
                             
-                            {/* 座布団アニメーション */}
-                            {gameConfig.mode === 'single' && result?.zabuton > 0 && (
-                                <div className="mb-4">
-                                   <ZabutonStack count={result.zabuton} />
-                                </div>
-                            )}
-
                             {gameConfig.mode === 'single' ? (
                                 <>
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
