@@ -13,23 +13,24 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.40";
+const APP_VERSION = "Ver 0.41";
 const UPDATE_LOGS = [
-  { version: "Ver 0.40", date: "2026/01/26", content: ["手札を8枚に増量", "レアカードシステム実装", "審査員のキャラ変機能", "座布団システム追加", "サドンデスの難易度上昇"] },
-  { version: "Ver 0.35", date: "2026/01/25", content: ["審査時の変数参照エラーを修正"] },
+  { version: "Ver 0.41", date: "2026/01/26", content: ["サバイバルモードのエラー(SURVIVAL_PASS_SCORE)を修正", "ゲーム再開時に操作不能になる不具合を修正"] },
+  { version: "Ver 0.40", date: "2026/01/26", content: ["手札を8枚に増量", "レアカードシステム実装", "審査員のキャラ変機能", "座布団システム追加"] },
 ];
 
 const TOTAL_ROUNDS = 5;
+const SURVIVAL_PASS_SCORE = 60; // 復活させた定数
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
-const HAND_SIZE = 8; // 手札を8枚に変更
+const HAND_SIZE = 8;
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-const API_TIMEOUT_MS = 20000; // タイムアウトを少し延長
+const API_TIMEOUT_MS = 20000;
 
 // 審査員タイプ定義
 const JUDGES = {
@@ -52,7 +53,7 @@ const FALLBACK_TOPICS = [
   "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
 ];
 
-// カードデータをオブジェクト化 { text: string, rarity: 'normal' | 'rare' }
+// カードデータをオブジェクト化
 const FALLBACK_ANSWERS = [
   { text: "賞味期限切れのプリン", rarity: "normal" },
   { text: "隣の家のポチ", rarity: "normal" },
@@ -186,53 +187,9 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
   </div>
 );
 
-const Card = ({ card, isSelected, onClick, disabled }) => {
-  const isRare = card.rarity === 'rare';
-  return (
-    <button 
-      onClick={() => !disabled && onClick(card.text)} 
-      disabled={disabled} 
-      className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden 
-      ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} 
-      ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}
-      ${isRare ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100 ring-1 ring-yellow-200' : ''}`}
-    >
-      {isRare && <span className="absolute top-1 right-1 text-[10px] text-yellow-600">★</span>}
-      {card.text}
-    </button>
-  );
-};
-
-const ZabutonStack = ({ count }) => {
-  const stack = Math.min(count, 20); // 最大20枚まで表示
-  const isGold = count >= 90;
-  return (
-    <div className="flex flex-col items-center justify-end h-32 w-full relative">
-      {Array.from({ length: stack }).map((_, i) => (
-        <div 
-          key={i} 
-          className={`h-3 w-32 rounded-lg border-b-2 absolute transition-all duration-500 ease-out
-            ${isGold ? 'bg-yellow-400 border-yellow-600 shadow-[0_0_10px_rgba(250,204,21,0.5)]' : 'bg-indigo-600 border-indigo-800'}
-          `}
-          style={{ 
-            bottom: `${i * 6}px`, 
-            zIndex: i,
-            width: `${100 - i}%`, // 上に行くほど少し小さく
-            transform: `translateY(${100 - (i*10)}%)`,
-            animation: `slideIn 0.3s ease-out ${i * 0.05}s forwards`
-          }} 
-        />
-      ))}
-      <div className="absolute bottom-[-20px] font-black text-slate-400 text-xs">× {count}枚</div>
-      <style jsx>{`
-        @keyframes slideIn {
-          from { transform: translateY(-50px); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-      `}</style>
-    </div>
-  );
-};
+const Card = ({ text, isSelected, onClick, disabled }) => (
+  <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
+);
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
@@ -456,7 +413,7 @@ export default function AiOgiriApp() {
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
-  const usedCardsRef = useRef(new Set());
+  const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
   const activeCardsRef = useRef(new Set());
 
   const [activeModal, setActiveModal] = useState(null);
@@ -559,7 +516,7 @@ export default function AiOgiriApp() {
   const saveGeneratedCards = async (newCards) => {
     if (!newCards || newCards.length === 0) return;
     const poolData = newCards.map(c => c.text);
-    const updatedPool = [...(learned.cardPool || []), ...poolData].slice(-100); 
+    const updatedPool = [...(learned.cardPool || []), ...newCards].slice(-100); 
     const uniquePool = Array.from(new Set(updatedPool));
     const newLocalData = { ...learned, cardPool: uniquePool };
     setLearned(newLocalData);
@@ -864,8 +821,20 @@ export default function AiOgiriApp() {
 
   // --- Game Control ---
   const initGame = async () => {
-      playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
-      setGameRadars([]); setTotalZabuton(0);
+      playSound('decision'); 
+      setAppMode('game'); 
+      setGamePhase('drawing'); 
+      setCurrentRound(1); 
+      setAnswerCount(0); 
+      setIsSurvivalGameOver(false); 
+      setIsJudging(false); // リセット追加
+      setIsAdvancingRound(false); // リセット追加
+      setStartTime(null); 
+      setFinishTime(null);
+      
+      setGameRadars([]); 
+      setTotalZabuton(0);
+      
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       activeCardsRef.current = new Set();
@@ -1245,16 +1214,9 @@ export default function AiOgiriApp() {
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
        <header className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-30">
           <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
-          <div className="flex items-center gap-4">
-              {gamePhase !== 'drawing' && totalZabuton > 0 && (
-                  <div className="flex items-center gap-1 bg-yellow-100 px-3 py-1 rounded-full text-xs font-bold text-yellow-800">
-                      <div className="w-4 h-3 bg-yellow-500 rounded-sm"></div>×{totalZabuton}
-                  </div>
-              )}
-              <div className="flex gap-2">
-                <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
-                {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
-              </div>
+          <div className="flex gap-2">
+              <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
+              {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
           </div>
        </header>
 
