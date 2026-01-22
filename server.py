@@ -4,47 +4,42 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
-from sentence_transformers import SentenceTransformer, util
+from google.genai import types
 import json
-import random
+import numpy as np
 
 # --- 設定 ---
 # 環境変数から取得するロジック
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not API_KEY:
-    # ローカルテスト用（必要に応じて書き換えてください。Gitには上げないでください）
-    # API_KEY = "AIzaSy..." 
-    pass
-
-if not API_KEY:
     print("エラー: APIキーが設定されていません。環境変数 GEMINI_API_KEY を設定してください。")
-    # サーバー起動自体はさせるが、APIコール時にエラーになる
     
 # --- 初期化 ---
 app = FastAPI()
 
-# CORS設定（Reactアプリからの通信を許可）
+# CORS設定
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 本番環境ではドメインを指定することを推奨
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-print("Loading models... (これには時間がかかります)")
+print("Initializing Gemini Client...")
 try:
     # Gemini Client
     client = genai.Client(api_key=API_KEY)
-    MODEL_NAME = 'gemini-2.0-flash'
     
-    # Vector Model (CPUでも動く軽量モデル)
-    vector_model = SentenceTransformer('paraphrase-multilingual-mpnet-base-v2')
-    print("Models loaded successfully!")
+    # テキスト生成モデル
+    GEN_MODEL_NAME = 'gemini-2.0-flash'
+    # ベクトル埋め込みモデル（軽量・高速）
+    EMBED_MODEL_NAME = 'text-embedding-004'
+    
+    print("Client initialized successfully!")
 except Exception as e:
-    print(f"Model loading error: {e}")
-    # モデル読み込み失敗時もサーバー自体は落とさない（ヘルスチェック用）
+    print(f"Initialization error: {e}")
 
 # --- リクエスト型定義 ---
 class TopicRequest(BaseModel):
@@ -60,24 +55,32 @@ class JudgeRequest(BaseModel):
     is_manual: bool = False
     personality: str = "standard"
 
+# --- 内部関数: コサイン類似度計算 ---
+def calculate_cosine_similarity(vec1, vec2):
+    # numpyを使って計算
+    dot_product = np.dot(vec1, vec2)
+    norm_a = np.linalg.norm(vec1)
+    norm_b = np.linalg.norm(vec2)
+    return dot_product / (norm_a * norm_b)
+
 # --- APIエンドポイント ---
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server is running"}
+    return {"status": "ok", "message": "AI Ogiri Server is running (Lightweight Mode)"}
 
 @app.post("/api/topic")
 def generate_topic():
     prompt = "大喜利のお題を1つ作成してください。条件: 問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{\"topic\":\"...\"}"
     try:
         response = client.models.generate_content(
-            model=MODEL_NAME, contents=prompt,
+            model=GEN_MODEL_NAME, contents=prompt,
             config={'response_mime_type': 'application/json'}
         )
         return json.loads(response.text)
     except Exception as e:
         print(f"Topic Error: {e}")
-        return {"topic": "エラーが発生しました。お題が出せません。"}
+        return {"topic": "エラーが発生したため、お題が出せません。"}
 
 @app.post("/api/cards")
 def generate_cards(req: CardRequest):
@@ -91,7 +94,7 @@ def generate_cards(req: CardRequest):
     """
     try:
         response = client.models.generate_content(
-            model=MODEL_NAME, contents=prompt,
+            model=GEN_MODEL_NAME, contents=prompt,
             config={'response_mime_type': 'application/json'}
         )
         return json.loads(response.text)
@@ -101,26 +104,45 @@ def generate_cards(req: CardRequest):
 
 @app.post("/api/judge")
 def judge_answer(req: JudgeRequest):
-    # 1. ベクトル類似度の計算
+    similarity = 0.5
+    distance_eval = "Unknown"
+
+    # 1. API経由でベクトル類似度を計算 (サーバーのメモリを使わない)
     try:
-        emb1 = vector_model.encode(req.topic)
-        emb2 = vector_model.encode(req.answer)
-        similarity = float(util.cos_sim(emb1, emb2).item())
-    except Exception:
-        similarity = 0.5 # エラー時のデフォルト値
+        # お題と回答をベクトル化
+        result_topic = client.models.embed_content(
+            model=EMBED_MODEL_NAME,
+            contents=req.topic
+        )
+        result_answer = client.models.embed_content(
+            model=EMBED_MODEL_NAME,
+            contents=req.answer
+        )
+        
+        # 類似度計算
+        similarity = calculate_cosine_similarity(
+            result_topic.embeddings[0].values,
+            result_answer.embeddings[0].values
+        )
+        similarity = float(similarity) # numpy float -> python float
 
-    # 距離感の判定テキスト
-    distance_eval = "Normal"
-    if 0.4 <= similarity <= 0.6:
-        distance_eval = "Sweet Spot (絶妙)"
-    elif similarity > 0.8:
-        distance_eval = "Too Close (近すぎ)"
-    elif similarity < 0.2:
-        distance_eval = "Too Far (遠すぎ)"
+        # 距離感の判定テキスト
+        if 0.4 <= similarity <= 0.6:
+            distance_eval = "Sweet Spot (絶妙)"
+        elif similarity > 0.8:
+            distance_eval = "Too Close (近すぎ)"
+        elif similarity < 0.2:
+            distance_eval = "Too Far (遠すぎ)"
+        else:
+            distance_eval = "Normal"
 
-    # 2. 審査員ペルソナの設定 (JS側と合わせる)
+    except Exception as e:
+        print(f"Embedding Error: {e}")
+        # エラーでも採点自体は止めない
+
+    # 2. 審査員ペルソナの設定
     personas = {
-        "strict": "あなたは激辛審査員です。採点は厳しく（基準より低め）、辛辣なコメントをします。",
+        "strict": "あなたは激辛審査員です。採点は厳しく（基準より-10点）、辛辣なコメントをします。",
         "gal": "あなたはギャル審査員です。「ウケる」「それな」などの若者言葉でノリよく採点します。",
         "chuuni": "あなたは厨二病審査員です。闇の炎や禁断の力に例えて大げさにコメントします。",
         "standard": "あなたは「ノリの良いお笑い審査員」です。"
@@ -153,18 +175,17 @@ def judge_answer(req: JudgeRequest):
 
     try:
         response = client.models.generate_content(
-            model=MODEL_NAME, contents=prompt,
+            model=GEN_MODEL_NAME, contents=prompt,
             config={'response_mime_type': 'application/json'}
         )
         result = json.loads(response.text)
         
-        # Python側で計算した類似度を結果に追加
+        # 計算した類似度を結果に追加
         result["distance"] = similarity
         
         return result
     except Exception as e:
         print(f"Judge Error: {e}")
-        # エラー時のフォールバック
         return {
             "comment": "審査中にエラーが起きたみたいやわ...",
             "reasoning": "AIとの通信に失敗しました。",
@@ -174,5 +195,4 @@ def judge_answer(req: JudgeRequest):
 
 if __name__ == "__main__":
     import uvicorn
-    # ローカルサーバー起動用
     uvicorn.run(app, host="0.0.0.0", port=8000)

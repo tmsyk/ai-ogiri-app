@@ -1,6 +1,5 @@
 fastapi
 uvicorn
 google-genai
-sentence-transformers
 numpy
 pydantic
