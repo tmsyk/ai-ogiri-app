@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.45";
+const APP_VERSION = "Ver 0.46";
 const UPDATE_LOGS = [
+  { version: "Ver 0.46", date: "2026/01/26", content: ["お題作成ボタンのエラーを修正", "入力フォームの属性を追加"] },
   { version: "Ver 0.45", date: "2026/01/26", content: ["お題作成画面のAIボタン不具合を修正", "レーダーチャートの0点位置を調整し視認性向上"] },
   { version: "Ver 0.44", date: "2026/01/25", content: ["採点基準を厳正化（0-5点評価）", "レーダーチャートのメリハリを調整"] },
-  { version: "Ver 0.43", date: "2026/01/25", content: ["スコア計算をレーダーチャート評価連動に変更", "グラフ表示位置のレイアウト調整"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -140,19 +140,14 @@ const Card = ({ text, isSelected, onClick, disabled }) => (
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const c = size / 2;
-  // 文字被りを防ぐため、半径を少し小さく設定
   const r = (size / 2) * 0.75;
   const max = maxValue;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
-  // 視認性向上のための補正
   const getP = (v, i) => {
     const val = Math.max(0, v);
-    // 修正: 0点を20%の位置にオフセット。5点を100%の位置にする線形補間
-    // ratio = 0.2 + (val / max) * 0.8
-    // これにより、0点でも少し広がり、各項目の差（凹凸）がわかりやすくなる
-    const ratio = 0.2 + (val / max) * 0.8;
+    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
@@ -166,30 +161,19 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {/* 背景グリッド */}
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
-             // グリッドは線形に描画（背景は0が中心）
-             // ユーザー要望に合わせて背景も0=20%にする場合はここも getP と同じロジックにするが、
-             // 通常グリッドは等間隔のほうが値が読みやすいため、グリッドは0.2刻みで描画しつつ、
-             // データのプロットだけを底上げするのが一般的。
-             // ここではデータの見え方に合わせ、グリッドも同じ比率で歪ませる（0=20%位置）
-             const val = l;
-             const ratio = 0.2 + (val / max) * 0.8;
-             const radius = ratio * r * 0.90;
+             const radius = (l / 5) * r * 0.90;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
-        {/* 軸線 */}
         {keys.map((_, i) => { 
-           // 軸は中心(20%地点ではなく本当の中心)から引く
-           const radius = r * 0.90; // 最大(100%地点)
+           const radius = r * 0.90;
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {/* ラベル位置 */}
         {keys.map((_, i) => { 
              const radius = r * 0.90 * 1.35; 
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
@@ -203,7 +187,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
 
 const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, resetLearnedData }) => (
   <ModalBase onClose={onClose} title="設定" icon={Settings}>
-      <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
+      <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input id="username" name="username" type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" /></div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label><input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" /></div>
       <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
