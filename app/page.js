@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.44";
+const APP_VERSION = "Ver 0.45";
 const UPDATE_LOGS = [
+  { version: "Ver 0.45", date: "2026/01/26", content: ["お題作成画面のAIボタン不具合を修正", "レーダーチャートの0点位置を調整し視認性向上"] },
   { version: "Ver 0.44", date: "2026/01/25", content: ["採点基準を厳正化（0-5点評価）", "レーダーチャートのメリハリを調整"] },
   { version: "Ver 0.43", date: "2026/01/25", content: ["スコア計算をレーダーチャート評価連動に変更", "グラフ表示位置のレイアウト調整"] },
-  { version: "Ver 0.42", date: "2026/01/25", content: ["AI評価項目とレーダーチャートの整合性を修正", "MyData画面の表示バグ修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -149,9 +149,10 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   // 視認性向上のための補正
   const getP = (v, i) => {
     const val = Math.max(0, v);
-    // 0点は中心。それ以外は 0.2 + 0.8 * (val / max) の割合で描画
-    // これにより、1点と5点の差を強調しつつ、最低限の大きさは確保する。
-    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
+    // 修正: 0点を20%の位置にオフセット。5点を100%の位置にする線形補間
+    // ratio = 0.2 + (val / max) * 0.8
+    // これにより、0点でも少し広がり、各項目の差（凹凸）がわかりやすくなる
+    const ratio = 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
@@ -168,14 +169,21 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         {/* 背景グリッド */}
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
-             // グリッドは線形に描画
-             const radius = (l / 5) * r * 0.90;
+             // グリッドは線形に描画（背景は0が中心）
+             // ユーザー要望に合わせて背景も0=20%にする場合はここも getP と同じロジックにするが、
+             // 通常グリッドは等間隔のほうが値が読みやすいため、グリッドは0.2刻みで描画しつつ、
+             // データのプロットだけを底上げするのが一般的。
+             // ここではデータの見え方に合わせ、グリッドも同じ比率で歪ませる（0=20%位置）
+             const val = l;
+             const ratio = 0.2 + (val / max) * 0.8;
+             const radius = ratio * r * 0.90;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {/* 軸線 */}
         {keys.map((_, i) => { 
-           const radius = r * 0.90;
+           // 軸は中心(20%地点ではなく本当の中心)から引く
+           const radius = r * 0.90; // 最大(100%地点)
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
@@ -183,7 +191,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         {/* ラベル位置 */}
         {keys.map((_, i) => { 
-             const radius = r * 0.90 * 1.35; // ラベル位置
+             const radius = r * 0.90 * 1.35; 
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
              const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
