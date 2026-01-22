@@ -1,0 +1,17 @@
+fastapiuvicorngoogle-genaisentence-transformersnumpypydantic
+#### 2. GitHubにアップロード
+`server.py` と `requirements.txt` を GitHub のリポジトリにアップロードします。
+
+**⚠️ 超重要：APIキーの取り扱い**
+`server.py` に **APIキーを直接書いたまま GitHub にアップロードしないでください！** 世界中に公開されてしまい、悪用される危険があります。
+コード内は元の状態（以下）に戻しておいてください。
+
+```python
+# API_KEY = "ここにAPIキーを貼り付け" 
+# ↑ 削除するか、空文字にしておく
+
+# 環境変数から取得するロジックが動くようにします
+API_KEY = os.environ.get("GEMINI_API_KEY")
+3. クラウドサービスと連携 (例: Render)Render などのサービスに登録します。「New Web Service」を作成し、GitHubのリポジトリを選択します。設定画面で以下を入力します。Build Command: pip install -r requirements.txtStart Command: uvicorn server:app --host 0.0.0.0 --port $PORTEnvironment Variables (環境変数): ここで GEMINI_API_KEY という名前で、実際のAPIキーを登録します。これで、あなたのPythonサーバーがインターネット上で動き出し、URL（例: https://ai-ogiri-server.onrender.com）が発行されます。4. アプリ側の接続先変更最後に、Next.jsアプリ（app/page.js）の接続先設定を、ローカルのアドレスから発行されたURLに変更します。// app/page.js の修正箇所
+// const API_BASE_URL = "http://127.0.0.1:8000/api"; // ローカル用
+const API_BASE_URL = "https://あなたのサーバーのURL.com/api"; // 本番用
