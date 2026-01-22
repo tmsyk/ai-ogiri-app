@@ -13,11 +13,11 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.50";
+const APP_VERSION = "Ver 0.51";
 const UPDATE_LOGS = [
+  { version: "Ver 0.51", date: "2026/01/26", content: ["タイトル画面のアイコンサイズを調整"] },
   { version: "Ver 0.50", date: "2026/01/26", content: ["背景画像(background.png)の読み込みに対応"] },
   { version: "Ver 0.49", date: "2026/01/26", content: ["回答カードの表示不具合を修正", "手札補充時の重複チェックを強化"] },
-  { version: "Ver 0.48", date: "2026/01/26", content: ["回答カードが表示されない不具合を修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -1049,13 +1049,19 @@ export default function AiOgiriApp() {
           setGameRadars(prev => [...prev, radar]);
       }
 
+      // 座布団計算
+      const newZabuton = Math.floor(score / 10);
+      setTotalZabuton(prev => prev + newZabuton);
+
       if (score >= HALL_OF_FAME_THRESHOLD) {
           const entry = { topic: currentTopic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
       }
       
+      // サバイバルモード: ラウンド数に応じて合格点が上がる
+      const currentPassScore = SURVIVAL_PASS_SCORE + (currentRound - 1) * 10;
       let isGameOver = false;
-      if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
+      if (gameConfig.singleMode === 'survival' && score < currentPassScore) {
           setIsSurvivalGameOver(true);
           isGameOver = true;
       }
@@ -1070,7 +1076,7 @@ export default function AiOgiriApp() {
           return newPlayers;
       });
       
-      setResult({ answer: text, score, comment, radar });
+      setResult({ answer: text, score, comment, radar, zabuton: newZabuton });
       setSelectedSubmission({ answerText: text, score, radar });
       
       setIsJudging(false); playSound('result'); setGamePhase('result');
