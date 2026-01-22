@@ -6,32 +6,38 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut 
+  VolumeX, PieChart, Activity, LogOut, Flame, Smile, GraduationCap 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.46";
+const APP_VERSION = "Ver 0.40";
 const UPDATE_LOGS = [
-  { version: "Ver 0.46", date: "2026/01/26", content: ["お題作成ボタンのエラーを修正", "入力フォームの属性を追加"] },
-  { version: "Ver 0.45", date: "2026/01/26", content: ["お題作成画面のAIボタン不具合を修正", "レーダーチャートの0点位置を調整し視認性向上"] },
-  { version: "Ver 0.44", date: "2026/01/25", content: ["採点基準を厳正化（0-5点評価）", "レーダーチャートのメリハリを調整"] },
+  { version: "Ver 0.40", date: "2026/01/26", content: ["手札を8枚に増量", "レアカードシステム実装", "審査員のキャラ変機能", "座布団システム追加", "サドンデスの難易度上昇"] },
+  { version: "Ver 0.35", date: "2026/01/25", content: ["審査時の変数参照エラーを修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
-const SURVIVAL_PASS_SCORE = 60;
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
 const WIN_SCORE_MULTI = 10;
-const HAND_SIZE = 6;
+const HAND_SIZE = 8; // 手札を8枚に変更
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-const API_TIMEOUT_MS = 15000; // APIタイムアウト時間
+const API_TIMEOUT_MS = 20000; // タイムアウトを少し延長
+
+// 審査員タイプ定義
+const JUDGES = {
+  standard: { name: "標準（関西弁）", icon: MessageSquare, desc: "ノリの良い関西弁でツッコミます。" },
+  strict: { name: "激辛（毒舌）", icon: Flame, desc: "採点が厳しく、辛辣なコメントをします。" },
+  gal: { name: "ギャル", icon: Sparkles, desc: "ノリとバイブスで採点します。" },
+  chuuni: { name: "厨二病", icon: Skull, desc: "闇の炎に抱かれたコメントをします。" },
+};
 
 const FALLBACK_TOPICS = [
   "100年後のオリンピックで新しく追加された競技とは？",
@@ -46,14 +52,60 @@ const FALLBACK_TOPICS = [
   "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
 ];
 
+// カードデータをオブジェクト化 { text: string, rarity: 'normal' | 'rare' }
 const FALLBACK_ANSWERS = [
-  "賞味期限切れのプリン", "隣の家のポチ", "確定申告書", "お母さんの手作り弁当", "爆発寸前のダイナマイト",
-  "聖徳太子の肖像画", "伝説の剣", "使いかけの消しゴム", "大量のわさび", "自分探しの旅", "闇の組織",
-  "タピオカ", "空飛ぶスパゲッティ", "5000兆円", "筋肉痛", "反抗期", "黒歴史", "パスワード", "ひざ小僧",
-  "絶対に押してはいけないボタン", "全裸の銅像", "生き別れの兄", "トイレットペーパーの芯", "3日前のおにぎり", "オカンの小言",
-  "虚無", "宇宙の真理", "生乾きの靴下", "高すぎるツボ", "怪しい勧誘", "激辛麻婆豆腐", "猫の肉球", "壊れたラジオ",
-  "深夜のラブレター", "既読スルー", "アフロヘアー", "筋肉", "プロテイン", "札束風呂", "へそくり", "火星人",
-  "透明人間", "サイズ違いの靴", "毒リンゴ", "マッチョな妖精", "空飛ぶサメ", "忍者", "侍", "YouTuber", "AI", "バグ", "404 Error"
+  { text: "賞味期限切れのプリン", rarity: "normal" },
+  { text: "隣の家のポチ", rarity: "normal" },
+  { text: "確定申告書", rarity: "normal" },
+  { text: "お母さんの手作り弁当", rarity: "normal" },
+  { text: "爆発寸前のダイナマイト", rarity: "rare" },
+  { text: "聖徳太子の肖像画", rarity: "normal" },
+  { text: "伝説の剣", rarity: "rare" },
+  { text: "使いかけの消しゴム", rarity: "normal" },
+  { text: "大量のわさび", rarity: "normal" },
+  { text: "自分探しの旅", rarity: "normal" },
+  { text: "闇の組織", rarity: "rare" },
+  { text: "タピオカ", rarity: "normal" },
+  { text: "空飛ぶスパゲッティ", rarity: "rare" },
+  { text: "5000兆円", rarity: "rare" },
+  { text: "筋肉痛", rarity: "normal" },
+  { text: "反抗期", rarity: "normal" },
+  { text: "黒歴史", rarity: "normal" },
+  { text: "パスワード", rarity: "normal" },
+  { text: "ひざ小僧", rarity: "normal" },
+  { text: "絶対に押してはいけないボタン", rarity: "rare" },
+  { text: "全裸の銅像", rarity: "rare" },
+  { text: "生き別れの兄", rarity: "normal" },
+  { text: "トイレットペーパーの芯", rarity: "normal" },
+  { text: "3日前のおにぎり", rarity: "normal" },
+  { text: "オカンの小言", rarity: "normal" },
+  { text: "虚無", rarity: "rare" },
+  { text: "宇宙の真理", rarity: "rare" },
+  { text: "生乾きの靴下", rarity: "normal" },
+  { text: "高すぎるツボ", rarity: "normal" },
+  { text: "怪しい勧誘", rarity: "normal" },
+  { text: "激辛麻婆豆腐", rarity: "normal" },
+  { text: "猫の肉球", rarity: "normal" },
+  { text: "壊れたラジオ", rarity: "normal" },
+  { text: "深夜のラブレター", rarity: "normal" },
+  { text: "既読スルー", rarity: "normal" },
+  { text: "アフロヘアー", rarity: "normal" },
+  { text: "筋肉", rarity: "normal" },
+  { text: "プロテイン", rarity: "normal" },
+  { text: "札束風呂", rarity: "rare" },
+  { text: "へそくり", rarity: "normal" },
+  { text: "火星人", rarity: "rare" },
+  { text: "透明人間", rarity: "rare" },
+  { text: "サイズ違いの靴", rarity: "normal" },
+  { text: "毒リンゴ", rarity: "normal" },
+  { text: "マッチョな妖精", rarity: "rare" },
+  { text: "空飛ぶサメ", rarity: "rare" },
+  { text: "忍者", rarity: "normal" },
+  { text: "侍", rarity: "normal" },
+  { text: "YouTuber", rarity: "normal" },
+  { text: "AI", rarity: "normal" },
+  { text: "バグ", rarity: "normal" },
+  { text: "404 Error", rarity: "normal" }
 ];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
@@ -134,21 +186,63 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
   </div>
 );
 
-const Card = ({ text, isSelected, onClick, disabled }) => (
-  <button onClick={() => !disabled && onClick(text)} disabled={disabled} className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden text-slate-800 ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}`}>{text}</button>
-);
+const Card = ({ card, isSelected, onClick, disabled }) => {
+  const isRare = card.rarity === 'rare';
+  return (
+    <button 
+      onClick={() => !disabled && onClick(card.text)} 
+      disabled={disabled} 
+      className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden 
+      ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} 
+      ${disabled ? 'opacity-60 cursor-not-allowed' : 'active:scale-95 cursor-pointer hover:border-indigo-300 hover:shadow-md'}
+      ${isRare ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100 ring-1 ring-yellow-200' : ''}`}
+    >
+      {isRare && <span className="absolute top-1 right-1 text-[10px] text-yellow-600">★</span>}
+      {card.text}
+    </button>
+  );
+};
+
+const ZabutonStack = ({ count }) => {
+  const stack = Math.min(count, 20); // 最大20枚まで表示
+  const isGold = count >= 90;
+  return (
+    <div className="flex flex-col items-center justify-end h-32 w-full relative">
+      {Array.from({ length: stack }).map((_, i) => (
+        <div 
+          key={i} 
+          className={`h-3 w-32 rounded-lg border-b-2 absolute transition-all duration-500 ease-out
+            ${isGold ? 'bg-yellow-400 border-yellow-600 shadow-[0_0_10px_rgba(250,204,21,0.5)]' : 'bg-indigo-600 border-indigo-800'}
+          `}
+          style={{ 
+            bottom: `${i * 6}px`, 
+            zIndex: i,
+            width: `${100 - i}%`, // 上に行くほど少し小さく
+            transform: `translateY(${100 - (i*10)}%)`,
+            animation: `slideIn 0.3s ease-out ${i * 0.05}s forwards`
+          }} 
+        />
+      ))}
+      <div className="absolute bottom-[-20px] font-black text-slate-400 text-xs">× {count}枚</div>
+      <style jsx>{`
+        @keyframes slideIn {
+          from { transform: translateY(-50px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+};
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
-  const c = size / 2;
-  const r = (size / 2) * 0.75;
-  const max = maxValue;
+  const r = size / 2, c = size / 2, max = maxValue;
   const labels = ["意外性", "文脈", "瞬発力", "毒気", "知性"]; 
   const keys = ["surprise", "context", "punchline", "humor", "intelligence"];
   
   const getP = (v, i) => {
     const val = Math.max(0, v);
-    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
-    const radius = ratio * r * 0.90; 
+    const ratio = val <= 0 ? 0 : 0.4 + (val / max) * 0.6;
+    const radius = ratio * r * 0.85; 
     return { 
       x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
       y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
@@ -163,19 +257,19 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
       <svg width={size} height={size} className="overflow-visible">
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
-             const radius = (l / 5) * r * 0.90;
+             const radius = (l / 5) * r * 0.85;
              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {keys.map((_, i) => { 
-           const radius = r * 0.90;
+           const radius = r * 0.85;
            const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
            const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         {keys.map((_, i) => { 
-             const radius = r * 0.90 * 1.35; 
+             const radius = r * 0.85 * 1.35; 
              const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
              const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
@@ -185,9 +279,20 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   );
 };
 
-const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, resetLearnedData }) => (
+const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, judgePersonality, setJudgePersonality, resetLearnedData }) => (
   <ModalBase onClose={onClose} title="設定" icon={Settings}>
       <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input id="username" name="username" type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
+      <div>
+        <label className="block text-sm font-bold text-slate-700 mb-2">審査員の性格</label>
+        <div className="grid grid-cols-2 gap-2">
+          {Object.entries(JUDGES).map(([key, info]) => (
+            <button key={key} onClick={() => { setJudgePersonality(key); playSound('tap'); }} className={`p-3 rounded-xl border-2 text-left text-xs ${judgePersonality === key ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200'}`}>
+              <div className="font-bold mb-1 flex items-center gap-1"><info.icon className="w-3 h-3"/> {info.name}</div>
+              <div className="text-slate-500 text-[10px] leading-tight">{info.desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" /></div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label><input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" /></div>
       <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
@@ -279,7 +384,7 @@ const InfoModal = ({ onClose, type }) => (
                <div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Sparkles className="w-5 h-5 text-yellow-500" /></div><p>AIが採点<br/>＆ツッコミ</p></div>
              </div>
           </section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの「回答回数」を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
+          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。ラウンドが進むと合格ラインが上昇します。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの「回答回数」を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
           <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点！</li></ul></section>
         </div>
       ) : (
@@ -299,6 +404,7 @@ const InfoModal = ({ onClose, type }) => (
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
+  const [judgePersonality, setJudgePersonality] = useState('standard');
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
   const [userName, setUserName] = useState("あなた");
   const [volume, setVolume] = useState(0.5);
@@ -342,6 +448,7 @@ export default function AiOgiriApp() {
   const [isAdvancingRound, setIsAdvancingRound] = useState(false);
   const [isCopied, setIsCopied] = useState(false);
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
+  const [totalZabuton, setTotalZabuton] = useState(0);
 
   const [currentUser, setCurrentUser] = useState(null);
   const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, totalRadar: {} });
@@ -349,7 +456,7 @@ export default function AiOgiriApp() {
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
-  const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
+  const usedCardsRef = useRef(new Set());
   const activeCardsRef = useRef(new Set());
 
   const [activeModal, setActiveModal] = useState(null);
@@ -373,20 +480,22 @@ export default function AiOgiriApp() {
     const unique = [];
     const local = new Set();
     for (const card of cards || []) {
-      const normalized = normalizeCardText(card);
+      const text = typeof card === 'string' ? card : card.text;
+      const normalized = normalizeCardText(text);
       if (!normalized || usedSet.has(normalized) || local.has(normalized)) continue;
       local.add(normalized);
-      unique.push(normalized);
+      // オブジェクトとして保持
+      unique.push(typeof card === 'string' ? { text: card, rarity: 'normal' } : card);
     }
     return unique;
   };
   const registerActiveCards = (cards) => {
-    cards.forEach(card => activeCardsRef.current.add(card));
+    cards.forEach(card => activeCardsRef.current.add(card.text));
   };
   const syncActiveCards = (hands, deck) => {
     const next = new Set();
-    hands.flat().forEach(card => next.add(card));
-    deck.forEach(card => next.add(card));
+    hands.flat().forEach(card => next.add(card.text));
+    deck.forEach(card => next.add(card.text));
     activeCardsRef.current = next;
   };
   
@@ -449,12 +558,13 @@ export default function AiOgiriApp() {
 
   const saveGeneratedCards = async (newCards) => {
     if (!newCards || newCards.length === 0) return;
-    const updatedPool = [...(learned.cardPool || []), ...newCards].slice(-100); 
+    const poolData = newCards.map(c => c.text);
+    const updatedPool = [...(learned.cardPool || []), ...poolData].slice(-100); 
     const uniquePool = Array.from(new Set(updatedPool));
     const newLocalData = { ...learned, cardPool: uniquePool };
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
-    if (currentUser && db) { const ref = getDocRef('shared_db', 'learned_data'); if (ref) try { await updateDoc(ref, { cardPool: arrayUnion(...newCards) }); } catch (e) {} }
+    if (currentUser && db) { const ref = getDocRef('shared_db', 'learned_data'); if (ref) try { await updateDoc(ref, { cardPool: arrayUnion(...poolData) }); } catch (e) {} }
   };
   const saveToHallOfFame = async (entry) => {
     const newLocalHall = [entry, ...hallOfFame];
@@ -650,16 +760,31 @@ export default function AiOgiriApp() {
     2. 架空の長すぎる造語（例：〇〇の〇〇な〇〇）は禁止。
     3. シンプルだが、お題と組み合わせると面白くなる言葉。
     4. ジャンルはバラバラに（食べ物、人物、場所、道具、抽象概念など）。
-    出力: {"answers": ["...", ...]}`;
+    5. インパクトの強い言葉には "rarity": "rare" を、それ以外は "normal" を付与。
+    出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`;
     const res = await callGemini(prompt);
-    const uniqueAnswers = getUniqueCards(res?.answers, usedSet);
+    // レスポンスが単純な文字列配列の場合のフォールバック
+    const rawAnswers = res?.answers || [];
+    const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a);
+    
+    const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet);
     if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
     return uniqueAnswers;
   };
   const fetchAiJudgment = async (topic, answer, isManual) => {
     const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を0-5で厳正に評価（3が標準）";
+    
+    // 審査員の性格によるプロンプト分岐
+    let personalityPrompt = "";
+    switch(judgePersonality) {
+        case 'strict': personalityPrompt = "あなたは超激辛審査員です。どんな回答も厳しく批判し、採点は-20点してください。"; break;
+        case 'gal': personalityPrompt = "あなたはギャルです。「ウケる」「それな」などの若者言葉でノリよく採点してください。"; break;
+        case 'chuuni': personalityPrompt = "あなたは厨二病です。闇の炎や禁断の力に例えて、難解かつ大げさにコメントしてください。"; break;
+        default: personalityPrompt = "あなたはノリの良いお笑い審査員です。"; break;
+    }
+
     const p = isManual
-      ? `あなたはプロのお笑い審査員です。以下のお題と回答に対し、厳正な審査を行ってください。
+      ? `${personalityPrompt} 以下のお題と回答に対し、厳正な審査を行ってください。
 お題: ${topic}
 回答: ${answer}
 
@@ -690,7 +815,7 @@ export default function AiOgiriApp() {
     }
     // プールから補充
     if (remaining > 0 && learned.cardPool?.length > 0) {
-      const poolCards = getUniqueCards(learned.cardPool, usedSet).slice(0, remaining);
+      const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t, rarity: 'normal' })), usedSet).slice(0, remaining);
       if (poolCards.length > 0) {
         registerActiveCards(poolCards);
         collected.push(...poolCards);
@@ -730,7 +855,7 @@ export default function AiOgiriApp() {
       if (!drawCard) break;
       
       // 手札に重複がなければ追加
-      if (!nextHand.includes(drawCard)) {
+      if (!nextHand.some(c => c.text === drawCard.text)) {
           nextHand.push(drawCard);
       }
     }
@@ -740,7 +865,7 @@ export default function AiOgiriApp() {
   // --- Game Control ---
   const initGame = async () => {
       playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
-      setGameRadars([]); 
+      setGameRadars([]); setTotalZabuton(0);
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       activeCardsRef.current = new Set();
@@ -841,8 +966,9 @@ export default function AiOgiriApp() {
 
   const handleTimeUp = () => {
       playSound('timeup');
-      const card = singlePlayerHand[0] || "時間切れ";
-      submitAnswer(card);
+      // 時間切れ時は手札の1枚目を強制提出
+      const cardText = singlePlayerHand[0]?.text || "時間切れ";
+      submitAnswer(cardText);
   };
 
   const submitAnswer = async (text, isManual = false) => {
@@ -850,10 +976,12 @@ export default function AiOgiriApp() {
       setSingleSelectedCard(text);
       setGamePhase('judging');
       
+      let currentHand = [...singlePlayerHand];
+
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
       if (!isManual && gameConfig.mode === 'single') {
           // 使ったカードを手札から消す
-          const currentHand = singlePlayerHand.filter(c => c !== text);
+          currentHand = singlePlayerHand.filter(c => c.text !== text);
           
           let nextDeck = [...cardDeck];
           
@@ -912,13 +1040,19 @@ export default function AiOgiriApp() {
           setGameRadars(prev => [...prev, radar]);
       }
 
+      // 座布団計算
+      const newZabuton = Math.floor(score / 10);
+      setTotalZabuton(prev => prev + newZabuton);
+
       if (score >= HALL_OF_FAME_THRESHOLD) {
           const entry = { topic: currentTopic, answer: text, score, comment, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
       }
       
+      // サバイバルモード: ラウンド数に応じて合格点が上がる
+      const currentPassScore = SURVIVAL_PASS_SCORE + (currentRound - 1) * 10;
       let isGameOver = false;
-      if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE) {
+      if (gameConfig.singleMode === 'survival' && score < currentPassScore) {
           setIsSurvivalGameOver(true);
           isGameOver = true;
       }
@@ -933,7 +1067,7 @@ export default function AiOgiriApp() {
           return newPlayers;
       });
       
-      setResult({ answer: text, score, comment, radar });
+      setResult({ answer: text, score, comment, radar, zabuton: newZabuton });
       setSelectedSubmission({ answerText: text, score, radar });
       
       setIsJudging(false); playSound('result'); setGamePhase('result');
@@ -984,11 +1118,11 @@ export default function AiOgiriApp() {
   
   const handleMultiSubmit = (text) => {
       setSubmissions(prev => [...prev, { playerId: players[turnPlayerIndex].id, answerText: text }]);
-      setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => c !== text) } : p));
+      setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => c.text !== text) } : p));
       setManualAnswerInput('');
       const nextTurn = (turnPlayerIndex + 1) % players.length;
       if (nextTurn === masterIndex) { 
-          let dummy = cardDeck[0] || "ダミー";
+          let dummy = cardDeck[0]?.text || "ダミー";
           setSubmissions(prev => shuffleArray([...prev, { playerId: 'dummy', answerText: dummy, isDummy: true }]));
           setGamePhase('judging');
       } else {
@@ -1111,9 +1245,16 @@ export default function AiOgiriApp() {
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20">
        <header className="bg-white border-b p-4 flex justify-between items-center sticky top-0 z-30">
           <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
-          <div className="flex gap-2">
-              <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
-              {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
+          <div className="flex items-center gap-4">
+              {gamePhase !== 'drawing' && totalZabuton > 0 && (
+                  <div className="flex items-center gap-1 bg-yellow-100 px-3 py-1 rounded-full text-xs font-bold text-yellow-800">
+                      <div className="w-4 h-3 bg-yellow-500 rounded-sm"></div>×{totalZabuton}
+                  </div>
+              )}
+              <div className="flex gap-2">
+                <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
+                {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
+              </div>
           </div>
        </header>
 
@@ -1214,9 +1355,9 @@ export default function AiOgiriApp() {
 
                         <div className="grid grid-cols-2 gap-3 mb-6">
                             {(gameConfig.mode === 'single' ? singlePlayerHand : players[turnPlayerIndex].hand).map((t, i) => (
-                                <Card key={i} text={t} disabled={isJudging} onClick={() => {
-                                    if(gameConfig.mode==='single') submitAnswer(t);
-                                    else if(window.confirm('このカードで回答しますか？')) handleMultiSubmit(t);
+                                <Card key={i} card={t} disabled={isJudging} onClick={(text) => {
+                                    if(gameConfig.mode==='single') submitAnswer(text);
+                                    else if(window.confirm('このカードで回答しますか？')) handleMultiSubmit(text);
                                 }} />
                             ))}
                         </div>
@@ -1264,11 +1405,21 @@ export default function AiOgiriApp() {
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
                             
+                            {/* 座布団アニメーション */}
+                            {gameConfig.mode === 'single' && result?.zabuton > 0 && (
+                                <div className="mb-4">
+                                   <ZabutonStack count={result.zabuton} />
+                                </div>
+                            )}
+
                             {gameConfig.mode === 'single' ? (
                                 <>
                                 <div className="text-6xl font-black text-yellow-500 mb-4">{result?.score}点</div>
                                 <div className="bg-slate-100 p-4 rounded-xl text-left inline-block">
-                                  <p className="font-bold text-xs text-slate-500 mb-1">AIコメント</p>
+                                  <p className="font-bold text-xs text-slate-500 mb-1 flex items-center gap-1">
+                                     {JUDGES[judgePersonality].icon && React.createElement(JUDGES[judgePersonality].icon, {className: "w-3 h-3"})} 
+                                     AIコメント ({JUDGES[judgePersonality].name})
+                                  </p>
                                   <p className="text-sm text-slate-800">{aiComment}</p>
                                   <div className="mt-2 flex items-center gap-2 text-xs text-slate-500">
                                     <span>評価:</span>
@@ -1335,7 +1486,7 @@ export default function AiOgiriApp() {
           )}
 
           {/* モーダル群 */}
-          {activeModal === 'settings' && <SettingsModal onClose={() => setActiveModal(null)} userName={userName} setUserName={saveUserName} timeLimit={timeLimit} setTimeLimit={saveTimeLimit} volume={volume} setVolume={saveVolume} playSound={playSound} resetLearnedData={resetLearnedData} />}
+          {activeModal === 'settings' && <SettingsModal onClose={() => setActiveModal(null)} userName={userName} setUserName={saveUserName} timeLimit={timeLimit} setTimeLimit={saveTimeLimit} volume={volume} setVolume={saveVolume} playSound={playSound} judgePersonality={judgePersonality} setJudgePersonality={setJudgePersonality} resetLearnedData={resetLearnedData} />}
           {activeModal === 'rule' && <InfoModal onClose={() => setActiveModal(null)} type="rule" />}
           {activeModal === 'update' && <InfoModal onClose={() => setActiveModal(null)} type="update" />}
           {activeModal === 'hall' && <HallOfFameModal onClose={() => setActiveModal(null)} data={hallOfFame} />}
