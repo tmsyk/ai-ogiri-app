@@ -14,17 +14,17 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.69 (Fix)";
+const APP_VERSION = "Ver 0.70 (Restored)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
 
 const UPDATE_LOGS = [
+  { version: "Ver 0.70", date: "2026/01/27", content: ["消失していたゲーム進行ロジックを完全復元", "安定版"] },
   { version: "Ver 0.69", date: "2026/01/27", content: ["ゲーム開始処理(initGame)のエラーを修正", "リセット処理を強化"] },
   { version: "Ver 0.68", date: "2026/01/27", content: ["全機能を正常に統合", "画面表示の不具合修正"] },
-  { version: "Ver 0.66", date: "2026/01/27", content: ["殿堂入りを上位3位までに制限", "全国ランキング(トップ10)機能を追加"] },
 ];
 
 const TOTAL_ROUNDS = 5;
-const SURVIVAL_PASS_SCORE = 60; // 定数定義の確認
+const SURVIVAL_PASS_SCORE = 60;
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
@@ -573,6 +573,7 @@ export default function AiOgiriApp() {
   const [hallTab, setHallTab] = useState('local'); 
   const audioCtx = useRef(null);
 
+  // --- Functions ---
   const playSound = (type) => {
       if (volume <= 0 || typeof window === 'undefined') return;
       if (!audioCtx.current) {
@@ -587,6 +588,7 @@ export default function AiOgiriApp() {
   };
 
   const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
+  
   const getUniqueCards = (cards, usedSet) => {
     const unique = [];
     const local = new Set();
@@ -599,35 +601,44 @@ export default function AiOgiriApp() {
     }
     return unique;
   };
+
   const registerActiveCards = (cards) => {
     cards.forEach(card => activeCardsRef.current.add(card.text));
   };
+
   const syncActiveCards = (hands, deck) => {
     const next = new Set();
     hands.flat().forEach(card => next.add(card.text));
     deck.forEach(card => next.add(card.text));
     activeCardsRef.current = next;
   };
+  
   const syncCardsWrapper = (hands, deck) => {
       syncActiveCards(hands, deck);
   };
+
   const addCardsToDeck = (cards) => {
     const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
     if (uniqueCards.length === 0) return;
     registerActiveCards(uniqueCards);
     setCardDeck(prev => [...prev, ...uniqueCards]);
   };
+
   const compactComment = (comment, maxLength = 30) => {
     if (!comment) return "";
     const trimmed = comment.toString().trim();
     const split = trimmed.split(/[。！？!?]/);
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
   };
-  const isTopicClear = (topic) => {
-    if (!topic) return false;
-    if (topic.includes('{placeholder}')) return false;
-    return true;
+
+  const checkContentSafety = async (text) => { 
+      if (!isAiActive) return false; 
+      try { 
+          const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); 
+          return res?.isInappropriate || false; 
+      } catch (e) { return false; } 
   };
+
   const formatAiComment = (comment) => {
     if (!comment) return "";
     return compactComment(comment);
@@ -728,17 +739,20 @@ export default function AiOgiriApp() {
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
+  
   const saveLearnedTopic = async (newTopic) => {
     if (newTopic.includes('{placeholder}')) return;
     const newLocalData = { ...learned, topics: [...learned.topics, newTopic] };
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
+  
   const saveLearnedAnswer = async (newAnswer) => {
     const newLocalData = { ...learned, goodAnswers: [...learned.goodAnswers, newAnswer] };
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
+  
   const saveAiCommentFeedback = async (comment, isGood) => {
     if (!comment) return;
     const feedbackEntry = { comment, isGood, date: new Date().toISOString() };
@@ -746,6 +760,7 @@ export default function AiOgiriApp() {
     const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 50);
     localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback));
   };
+  
   const resetLearnedData = () => {
     if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
       localStorage.removeItem('aiOgiriLearnedData');
@@ -755,6 +770,7 @@ export default function AiOgiriApp() {
       alert("リセットしました。");
     }
   };
+  
   const updateRanking = async (modeName, value) => {
     setRankings(prev => {
       const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry];
@@ -784,59 +800,64 @@ export default function AiOgiriApp() {
       };
   };
 
-  useEffect(() => {
-    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
-    if (localLearned) { 
-        const parsed = JSON.parse(localLearned); 
-        const cleanTopics = (parsed.topics || []).filter(t => !t.includes('{placeholder}'));
-        const cleanPool = (parsed.cardPool || []).filter(c => typeof c === 'string' && c.length < 20); 
-        setLearned({...parsed, topics: cleanTopics, cardPool: cleanPool}); 
-        if (cleanTopics.length > 0) setTopicsList(prev => [...prev, ...cleanTopics]);
-        if (cleanPool.length > 0) {
-            cleanPool.forEach(c => usedCardsRef.current.add(c));
-        }
-    }
-    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
-    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
-    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
-    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
-    
-    if (auth) { 
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            setCurrentUser(u);
-            if (u && !u.isAnonymous) {
-                try {
-                    const statsRef = getUserDocRef(u.uid, 'stats');
-                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
-                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
-                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
-                } catch (e) { console.error("Data sync error:", e); }
-            }
-        });
-        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
-        return () => unsub();
-    }
-  }, []);
+  const collectCards = async (count) => {
+    const collected = [];
+    let remaining = count;
+    const usedSet = activeCardsRef.current;
 
-  useEffect(() => {
-      if (!db) return;
-      const rankRef = getDocRef('shared_db', 'global_ranking');
-      if (rankRef) {
-          const unsub = onSnapshot(rankRef, (doc) => {
-              if (doc.exists()) {
-                  setGlobalRankings(doc.data().score_attack || []);
-              }
-          });
-          return () => unsub();
+    if (isAiActive && remaining > 0) {
+      const aiCards = await fetchAiCards(Math.max(remaining, HAND_SIZE), usedSet);
+      if (aiCards.length > 0) {
+        registerActiveCards(aiCards);
+        collected.push(...aiCards);
+        remaining -= aiCards.length;
       }
-  }, []);
+    }
+    if (remaining > 0 && learned.cardPool?.length > 0) {
+      const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t, rarity: 'normal' })), usedSet).slice(0, remaining);
+      if (poolCards.length > 0) {
+        registerActiveCards(poolCards);
+        collected.push(...poolCards);
+        remaining -= poolCards.length;
+      }
+    }
+    if (remaining > 0) {
+      const fallbackCards = getUniqueCards(FALLBACK_ANSWERS, usedSet).slice(0, remaining);
+      if (fallbackCards.length > 0) {
+        registerActiveCards(fallbackCards);
+        collected.push(...fallbackCards);
+      }
+    }
+    if (remaining > 0) {
+      const resetCards = getUniqueCards(FALLBACK_ANSWERS, new Set());
+      collected.push(...resetCards.slice(0, remaining));
+    }
+    return collected;
+  };
 
-  useEffect(() => { let t; if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000); else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); } return () => clearInterval(t); }, [isTimerRunning, timeLeft]);
-  useEffect(() => { let t; if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) { t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100); } return () => clearInterval(t); }, [appMode, startTime, finishTime]);
-  useEffect(() => { if (!isAiActive || appMode !== 'game') return; if (cardDeck.length >= HAND_SIZE * 2) return; const now = Date.now(); if (now - lastCardFetchRef.current < 5000) return; lastCardFetchRef.current = now; fetchAiCards(HAND_SIZE).then(addCardsToDeck); }, [appMode, cardDeck.length, isAiActive]);
+  const refillHand = async (hand, deck, desiredSize = HAND_SIZE) => {
+    let nextHand = [...hand];
+    let nextDeck = [...deck];
+    
+    while (nextHand.length < desiredSize) {
+      if (nextDeck.length === 0) {
+        const refill = await collectCards(Math.max(desiredSize - nextHand.length, 5));
+        if (refill.length === 0) break; 
+        nextDeck = [...nextDeck, ...refill];
+      }
+      
+      const drawCard = nextDeck.shift();
+      if (!drawCard) break;
+      
+      const drawText = typeof drawCard === 'string' ? drawCard : drawCard.text;
+      if (!nextHand.some(c => (typeof c === 'string' ? c : c.text) === drawText)) {
+          nextHand.push(drawCard);
+      }
+    }
+    return { hand: nextHand, deck: nextDeck };
+  };
 
+  // --- API Calls ---
   const callGemini = async (prompt) => {
       if (!isAiActive) return null;
       const controller = new AbortController();
@@ -857,9 +878,23 @@ export default function AiOgiriApp() {
           } catch(e2) { return null; }
       }
   };
-  const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
-  const fetchAiTopic = async () => { const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5); const ref = shuffleArray(cleanRef).join("\n"); return (await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."} 参考:\n${ref}`))?.topic || null; };
-  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => { const prompt = `大喜利の回答カード（単語・短いフレーズ）を${count}個作成。条件: 1.実在する言葉 2.インパクト強ければ"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; const res = await callGemini(prompt); const rawAnswers = res?.answers || []; const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); return uniqueAnswers; };
+
+  const fetchAiTopic = async () => {
+    const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
+    const ref = shuffleArray(cleanRef).join("\n");
+    return (await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."} 参考:\n${ref}`))?.topic || null;
+  };
+  
+  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
+    const prompt = `大喜利の回答カード（単語・短いフレーズ）を${count}個作成。条件: 1.実在する言葉 2.インパクト強ければ"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
+    const res = await callGemini(prompt); 
+    const rawAnswers = res?.answers || []; 
+    const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
+    const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
+    if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
+    return uniqueAnswers; 
+  };
+
   const fetchAiJudgment = async (topic, answer, isManual) => {
     const radarDesc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）";
     let personalityPrompt = "";
@@ -871,6 +906,20 @@ export default function AiOgiriApp() {
     }
     const p = isManual ? `${personalityPrompt} お題:${topic} 回答:${answer} 1.不適切チェック 2.採点(0-100) 3.ツッコミ 4.${radarDesc} 出力JSON: {"score":0, "comment":"...", "radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 甘めに。 4.鋭いツッコミ 出力:{"score":0,"comment":"...","radar":{...}}`;
     return await callGemini(p);
+  };
+
+  // --- Game Flow Functions ---
+  const startRound = (turn) => {
+      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
+      setIsAdvancingRound(false);
+      setTurnPlayerIndex(turn); 
+      
+      if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
+          generateTopic(true);
+      } else {
+          setGamePhase('master_topic');
+      }
   };
 
   const generateTopic = async (auto = false) => {
@@ -911,21 +960,86 @@ export default function AiOgiriApp() {
     } else prepareNextSubmitter(masterIndex, masterIndex, players);
   };
 
-  const rerollHand = async () => {
-      playSound('card'); if(hasHandRerolled) return; 
-      setIsTimerRunning(false);
-      const needed = HAND_SIZE; let newDeck = [...cardDeck];
-      if (newDeck.length < needed) { const refill = await collectCards(needed - newDeck.length); newDeck = [...newDeck, ...refill]; }
-      const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
-      setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
-      const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
-      setSinglePlayerHand(filledHand); setCardDeck(filledDeck); setHasHandRerolled(true);
-      syncCardsWrapper([filledHand], filledDeck);
-      if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-      if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
+  const initGame = async () => {
+      playSound('decision'); 
+      setAppMode('game'); 
+      setGamePhase('drawing'); 
+      setCurrentRound(1); 
+      setAnswerCount(0); 
+      setIsSurvivalGameOver(false); 
+      setIsJudging(false);
+      setIsAdvancingRound(false);
+      setStartTime(null); 
+      setFinishTime(null);
+      setGameRadars([]); 
+      setTotalZabuton(0);
+      
+      if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
+      
+      activeCardsRef.current = new Set();
+      const targetDeckSize = Math.max(INITIAL_DECK_SIZE, HAND_SIZE * (gameConfig.mode === 'single' ? 2 : gameConfig.playerCount + 1) * 3);
+      const collected = await collectCards(targetDeckSize);
+      const initialDeck = shuffleArray(collected);
+      
+      setCardDeck(initialDeck);
+
+      const draw = (d, n) => {
+           const h = []; 
+           const rest = [...d];
+           for(let i=0; i<n; i++) {
+              if (rest.length === 0) break;
+               h.push(rest.shift());
+           }
+           return { h, rest };
+      };
+
+      let currentD = initialDeck;
+      
+      if (gameConfig.mode === 'single') {
+          const { h: pHand, rest } = draw(currentD, HAND_SIZE);
+          currentD = rest;
+          setPlayers([{ id: 0, name: userName, score: 0, hand: pHand }, { id: 'ai', name: 'AI審査員', score: 0, hand: [] }]);
+          setSinglePlayerHand(pHand);
+          setMasterIndex(0);
+          syncCardsWrapper([pHand], currentD);
+      } else {
+          const newPlayers = [];
+          for(let i=0; i<gameConfig.playerCount; i++){
+              const { h, rest } = draw(currentD, HAND_SIZE);
+              currentD = rest;
+              newPlayers.push({ id: i, name: multiNames[i] || `P${i+1}`, score: 0, hand: h });
+          }
+          setPlayers(newPlayers);
+          setMasterIndex(Math.floor(Math.random() * gameConfig.playerCount));
+          syncCardsWrapper(newPlayers.map(p => p.hand), currentD);
+      }
+      
+      setCardDeck(currentD);
+      setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
-  
-  const handleHandReroll = async () => { rerollHand(); }; // Alias for compatibility
+
+  const nextGameRound = () => {
+      playSound('tap');
+      if (isAdvancingRound) return;
+      setIsAdvancingRound(true);
+      
+      setGamePhase('drawing');
+
+      setTimeout(() => {
+        if (gameConfig.mode === 'single') {
+            if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
+            if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', currentRound - 1); return setGamePhase('final_result'); }
+            if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setGamePhase('final_result'); }
+        } else {
+            if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
+        }
+        
+        setCurrentRound(r => r + 1);
+        const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
+        setMasterIndex(nextMaster);
+        startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
+      }, 500);
+  };
 
   const submitAnswer = async (text, isManual = false) => {
       playSound('decision'); setIsTimerRunning(false); setIsJudging(true);
@@ -956,7 +1070,6 @@ export default function AiOgiriApp() {
       if (radar) { updateUserStats(score, radar); setGameRadars(prev => [...prev, radar]); }
       const newZabuton = Math.floor(score / 10); setTotalZabuton(prev => prev + newZabuton);
 
-      // 殿堂入り判定 & 保存
       if (score >= HALL_OF_FAME_THRESHOLD) {
           const entry = { topic: currentTopic, answer: text, score, comment, radar, player: userName, date: new Date().toLocaleDateString() };
           saveToHallOfFame(entry);
@@ -973,6 +1086,21 @@ export default function AiOgiriApp() {
       setIsJudging(false); playSound('result'); setGamePhase('result');
   };
 
+  const rerollHand = async () => {
+      playSound('card'); if(hasHandRerolled) return; 
+      setIsTimerRunning(false);
+      const needed = HAND_SIZE; let newDeck = [...cardDeck];
+      if (newDeck.length < needed) { const refill = await collectCards(needed - newDeck.length); newDeck = [...newDeck, ...refill]; }
+      const newHand = []; for(let i=0; i<needed; i++) newHand.push(newDeck.shift());
+      setSinglePlayerHand(newHand); setCardDeck(newDeck); setHasHandRerolled(true);
+      const { hand: filledHand, deck: filledDeck } = await refillHand(newHand, newDeck, HAND_SIZE);
+      setSinglePlayerHand(filledHand); setCardDeck(filledDeck); setHasHandRerolled(true);
+      syncCardsWrapper([filledHand], filledDeck);
+      if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
+      if (isAiActive) fetchAiCards(5).then(addCardsToDeck);
+  };
+  
+  const handleHandReroll = async () => { rerollHand(); };
   const handleMultiSubmit = (text) => {
       setSubmissions(prev => [...prev, { playerId: players[turnPlayerIndex].id, answerText: text }]);
       setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => (typeof c === 'string' ? c : c.text) !== text) } : p));
@@ -984,7 +1112,6 @@ export default function AiOgiriApp() {
           setGamePhase('judging');
       } else { setTurnPlayerIndex(nextTurn); setGamePhase('turn_change'); }
   };
-
   const handleJudge = (sub) => { playSound('decision'); setSelectedSubmission(sub); setPlayers(prev => prev.map(p => { if (sub.isDummy && p.id === players[masterIndex].id) return { ...p, score: p.score - 1 }; if (!sub.isDummy && p.id === sub.playerId) return { ...p, score: p.score + 1 }; return p; })); playSound('result'); setGamePhase('result'); };
   const handleTopicReroll = async () => { playSound('tap'); if (hasTopicRerolled || isGeneratingTopic) return; setIsGeneratingTopic(true); let topic = ""; try { const res = await fetchAiTopic(); topic = res || FALLBACK_TOPICS[0]; } catch(e) { topic = FALLBACK_TOPICS[0]; } setCurrentTopic(topic); setHasTopicRerolled(true); setIsGeneratingTopic(false); };
   const handleSingleSubmitManual = async (text) => { submitAnswer(text, true); };
@@ -993,6 +1120,51 @@ export default function AiOgiriApp() {
   const confirmTopic = () => { playSound('decision'); setCurrentTopic(manualTopicInput); if (gameConfig.mode === 'single') { setGamePhase('answer_input'); setTimeLeft(timeLimit); if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true); } else { setGamePhase('turn_change'); setTurnPlayerIndex((masterIndex + 1) % players.length); } };
   const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
   const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
+
+  // --- Effect Hooks ---
+  useEffect(() => {
+    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
+    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
+    if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
+    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
+    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
+    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
+    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
+    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
+    
+    if (auth) { 
+        const unsub = onAuthStateChanged(auth, async (u) => {
+            setCurrentUser(u);
+            if (u && !u.isAnonymous) {
+                try {
+                    const statsRef = getUserDocRef(u.uid, 'stats');
+                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
+                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
+                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
+                } catch (e) { console.error("Data sync error:", e); }
+            }
+        });
+        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
+        return () => unsub();
+    }
+  }, []);
+
+  useEffect(() => {
+      if (!db) return;
+      const rankRef = getDocRef('shared_db', 'global_ranking');
+      if (rankRef) {
+          const unsub = onSnapshot(rankRef, (doc) => {
+              if (doc.exists()) {
+                  setGlobalRankings(doc.data().score_attack || []);
+              }
+          });
+          return () => unsub();
+      }
+  }, []);
+
+  useEffect(() => { let t; if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000); else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); } return () => clearInterval(t); }, [isTimerRunning, timeLeft]);
+  useEffect(() => { let t; if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) { t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100); } return () => clearInterval(t); }, [appMode, startTime, finishTime]);
+  useEffect(() => { if (!isAiActive || appMode !== 'game') return; if (cardDeck.length >= HAND_SIZE * 2) return; const now = Date.now(); if (now - lastCardFetchRef.current < 5000) return; lastCardFetchRef.current = now; fetchAiCards(HAND_SIZE).then(addCardsToDeck); }, [appMode, cardDeck.length, isAiActive]);
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20" style={{backgroundImage: 'url("/background.png")', backgroundSize: 'cover', backgroundAttachment: 'fixed'}}>
