@@ -13,12 +13,12 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.54";
+const APP_VERSION = "Ver 0.63";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.54", date: "2026/01/27", content: ["レーダーチャートが表示されないバグを修正", "手札が消費されないバグを修正"] },
-  { version: "Ver 0.53", date: "2026/01/26", content: ["レーダーチャートの変化が出やすいように調整", "AIの評価傾向にメリハリを追加"] },
+  { version: "Ver 0.63", date: "2026/01/27", content: ["殿堂入りデータにレーダーチャート情報を追加保存するように修正", "殿堂入り一覧でのグラフ表示に対応"] },
+  { version: "Ver 0.62", date: "2026/01/27", content: ["手札交換を1ゲーム1回に変更", "フリースタイル終了機能追加", "マイデータ表示調整"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -36,7 +36,7 @@ const API_TIMEOUT_MS = 25000;
 
 // 審査員タイプ定義
 const JUDGES = {
-  logic: { name: "理論派審査員", icon: Microscope, desc: "ユーモアの構造を分析し、5つの指標で採点します。" },
+  logic: { name: "理論派審査員", icon: Microscope, desc: "ユーモアの構造（不突合と解決）を分析し、5つの指標で厳格に採点します。" },
   standard: { name: "標準（関西弁）", icon: MessageSquare, desc: "ノリの良い関西弁でツッコミます。" },
   strict: { name: "激辛（毒舌）", icon: Flame, desc: "採点が厳しく、辛辣なコメントをします。" },
   gal: { name: "ギャル", icon: Sparkles, desc: "ノリとバイブスで採点します。" },
@@ -49,6 +49,11 @@ const FALLBACK_TOPICS = [
   "桃太郎が鬼ヶ島へ行くのをやめた理由とは？",
   "上司への謝罪メール、件名に入れると許される言葉とは？",
   "実は地球は何でできている？",
+  "AIが人間に反乱を起こした意外な理由とは？",
+  "「全米が泣いた」映画の衝撃のラストシーンに映ったものとは？",
+  "そんなことで警察を呼ぶな！現場にあったものとは？",
+  "コンビニの店員が突然キレた原因とは？",
+  "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
 ];
 
 const FALLBACK_ANSWERS = [
@@ -61,9 +66,50 @@ const FALLBACK_ANSWERS = [
   { text: "伝説の剣", rarity: "rare" },
   { text: "使いかけの消しゴム", rarity: "normal" },
   { text: "大量のわさび", rarity: "normal" },
-  { text: "自分探しの旅", rarity: "normal" }
+  { text: "自分探しの旅", rarity: "normal" },
+  { text: "闇の組織", rarity: "rare" },
+  { text: "タピオカ", rarity: "normal" },
+  { text: "空飛ぶスパゲッティ", rarity: "rare" },
+  { text: "5000兆円", rarity: "rare" },
+  { text: "筋肉痛", rarity: "normal" },
+  { text: "反抗期", rarity: "normal" },
+  { text: "黒歴史", rarity: "normal" },
+  { text: "パスワード", rarity: "normal" },
+  { text: "ひざ小僧", rarity: "normal" },
+  { text: "絶対に押してはいけないボタン", rarity: "rare" },
+  { text: "全裸の銅像", rarity: "rare" },
+  { text: "生き別れの兄", rarity: "normal" },
+  { text: "トイレットペーパーの芯", rarity: "normal" },
+  { text: "3日前のおにぎり", rarity: "normal" },
+  { text: "オカンの小言", rarity: "normal" },
+  { text: "虚無", rarity: "rare" },
+  { text: "宇宙の真理", rarity: "rare" },
+  { text: "生乾きの靴下", rarity: "normal" },
+  { text: "高すぎるツボ", rarity: "normal" },
+  { text: "怪しい勧誘", rarity: "normal" },
+  { text: "激辛麻婆豆腐", rarity: "normal" },
+  { text: "猫の肉球", rarity: "normal" },
+  { text: "壊れたラジオ", rarity: "normal" },
+  { text: "深夜のラブレター", rarity: "normal" },
+  { text: "既読スルー", rarity: "normal" },
+  { text: "アフロヘアー", rarity: "normal" },
+  { text: "筋肉", rarity: "normal" },
+  { text: "プロテイン", rarity: "normal" },
+  { text: "札束風呂", rarity: "rare" },
+  { text: "へそくり", rarity: "normal" },
+  { text: "火星人", rarity: "rare" },
+  { text: "透明人間", rarity: "rare" },
+  { text: "サイズ違いの靴", rarity: "normal" },
+  { text: "毒リンゴ", rarity: "normal" },
+  { text: "マッチョな妖精", rarity: "rare" },
+  { text: "空飛ぶサメ", rarity: "rare" },
+  { text: "忍者", rarity: "normal" },
+  { text: "侍", rarity: "normal" },
+  { text: "YouTuber", rarity: "normal" },
+  { text: "AI", rarity: "normal" },
+  { text: "バグ", rarity: "normal" },
+  { text: "404 Error", rarity: "normal" }
 ];
-
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
 // --- Firebase設定 ---
@@ -104,6 +150,30 @@ const formatTime = (ms) => {
   const seconds = Math.floor((ms % 60000) / 1000);
   const milliseconds = Math.floor((ms % 1000) / 10);
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
+};
+
+// タイプ診断ロジック
+const analyzeType = (radar) => {
+    if (!radar) return "判定不能";
+    const novelty = radar.novelty || 0;
+    const clarity = radar.clarity || 0;
+    const relevance = radar.relevance || 0;
+    const intelligence = radar.intelligence || 0;
+    const empathy = radar.empathy || 0;
+
+    const total = novelty + clarity + relevance + intelligence + empathy;
+    const maxVal = Math.max(novelty, clarity, relevance, intelligence, empathy);
+
+    if (total >= 22) return "お笑い完全生命体";
+    if (total <= 8) return "伸びしろしかない新人";
+
+    if (maxVal === novelty) return "孤高のシュール職人";
+    if (maxVal === clarity) return "伝わりやすさの鬼";
+    if (maxVal === relevance) return "文脈を操る魔術師";
+    if (maxVal === intelligence) return "インテリジェンスの覇者";
+    if (maxVal === empathy) return "共感のカリスマ";
+    
+    return "バランスの取れたオールラウンダー";
 };
 
 // --- Web Audio API Helper ---
@@ -164,14 +234,13 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
   );
 };
 
-// レーダーチャート（5項目：新規性、明瞭性、関連性、知性、共感性）
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
   const labels = ["新規性", "明瞭性", "関連性", "知性", "共感性"]; 
   const keys = ["novelty", "clarity", "relevance", "intelligence", "empathy"];
   
   const getP = (v, i) => {
-    const val = Math.max(0, v || 0); // undefined対策
+    const val = Math.max(0, v || 0);
     // 0点は中心。それ以外は 0.2 + 0.8 * (val / max) の割合で描画
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
@@ -282,30 +351,6 @@ const ZabutonStack = ({ count }) => {
   );
 };
 
-// タイプ診断ロジック
-const analyzeType = (radar) => {
-    if (!radar) return "判定不能";
-    const novelty = radar.novelty || 0;
-    const clarity = radar.clarity || 0;
-    const relevance = radar.relevance || 0;
-    const intelligence = radar.intelligence || 0;
-    const empathy = radar.empathy || 0;
-
-    const total = novelty + clarity + relevance + intelligence + empathy;
-    const maxVal = Math.max(novelty, clarity, relevance, intelligence, empathy);
-
-    if (total >= 22) return "お笑い完全生命体";
-    if (total <= 8) return "伸びしろしかない新人";
-
-    if (maxVal === novelty) return "孤高のシュール職人";
-    if (maxVal === clarity) return "伝わりやすさの鬼";
-    if (maxVal === relevance) return "文脈を操る魔術師";
-    if (maxVal === intelligence) return "インテリジェンスの覇者";
-    if (maxVal === empathy) return "共感のカリスマ";
-    
-    return "バランスの取れたオールラウンダー";
-};
-
 const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, judgePersonality, setJudgePersonality, resetLearnedData }) => (
   <ModalBase onClose={onClose} title="設定" icon={Settings}>
       <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input id="username" name="username" type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
@@ -371,6 +416,9 @@ const HallOfFameModal = ({ onClose, data }) => {
                         <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
                         <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
                         <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
+                        <div className="flex justify-center my-2">
+                           {item.radar && <RadarChart data={item.radar} size={100} maxValue={5} />}
+                        </div>
                         <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
                     </div>
                 )))}
@@ -553,6 +601,7 @@ export default function AiOgiriApp() {
   };
   const isTopicClear = (topic) => {
     if (!topic) return false;
+    // 穴埋め記号が含まれていたらNG
     if (topic.includes('{placeholder}')) return false;
     return true;
   };
@@ -1029,11 +1078,8 @@ export default function AiOgiriApp() {
 
       // 手札の消費と補充 (シングルプレイかつカード選択時のみ)
       if (!isManual && gameConfig.mode === 'single') {
-          // 使ったカードを手札から消す (空白や改行をトリムして比較)
-          currentHand = singlePlayerHand.filter(c => {
-             const cText = typeof c === 'string' ? c : c.text;
-             return cText.trim() !== text.trim();
-          });
+          // 使ったカードを手札から消す
+          currentHand = singlePlayerHand.filter(c => (typeof c === 'string' ? c : c.text) !== text);
           
           let nextDeck = [...cardDeck];
           
@@ -1083,8 +1129,6 @@ export default function AiOgiriApp() {
           // Fallback logic
           score = Math.floor(Math.random() * 40) + 40;
           comment = FALLBACK_COMMENTS[Math.floor(Math.random() * FALLBACK_COMMENTS.length)];
-          // フォールバックでもレーダーチャートを表示できるようにダミーデータを生成
-          radar = { novelty: 3, clarity: 3, relevance: 3, intelligence: 3, empathy: 3 };
       }
       
       setAiComment(formatAiComment(comment));
@@ -1427,6 +1471,9 @@ export default function AiOgiriApp() {
                                 }} disabled={!manualAnswerInput.trim() || isJudging} className="px-4 bg-slate-800 text-white rounded font-bold">送信</button>
                             </div>
                         </div>
+                        {gameConfig.singleMode === 'freestyle' && (
+                            <button onClick={() => setGamePhase('final_result')} className="w-full mt-4 py-3 bg-red-100 text-red-500 font-bold rounded-xl text-xs hover:bg-red-200">ゲームを終了して結果を見る</button>
+                        )}
                     </div>
                 )}
                 
