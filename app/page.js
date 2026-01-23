@@ -14,17 +14,17 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.68";
+const APP_VERSION = "Ver 0.69 (Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.68", date: "2026/01/27", content: ["画面が表示されない致命的なバグを修正", "全機能を正常に統合"] },
+  { version: "Ver 0.69", date: "2026/01/27", content: ["ゲーム開始処理(initGame)のエラーを修正", "リセット処理を強化"] },
+  { version: "Ver 0.68", date: "2026/01/27", content: ["全機能を正常に統合", "画面表示の不具合修正"] },
   { version: "Ver 0.66", date: "2026/01/27", content: ["殿堂入りを上位3位までに制限", "全国ランキング(トップ10)機能を追加"] },
-  { version: "Ver 0.65", date: "2026/01/27", content: ["Googleログイン機能を追加", "個人データのクラウド同期に対応"] },
 ];
 
 const TOTAL_ROUNDS = 5;
-const SURVIVAL_PASS_SCORE = 60;
+const SURVIVAL_PASS_SCORE = 60; // 定数定義の確認
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
@@ -248,7 +248,6 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
-    // 0点は中心。それ以外は 0.2 + 0.8 * (val / max) の割合で描画
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
     return { 
@@ -430,7 +429,7 @@ const MyDataModal = ({ stats, onClose, userName }) => {
 };
 
 const HallOfFameModal = ({ onClose, data, globalRankings, activeTab, setActiveTab }) => {
-  const localSorted = [...data].sort((a, b) => b.score - a.score).slice(0, 3); // 自分の記録は3つまで表示
+  const localSorted = [...data].sort((a, b) => b.score - a.score).slice(0, 3);
   const globalSorted = globalRankings ? [...globalRankings].sort((a, b) => b.score - a.score).slice(0, 10) : [];
 
   return (
@@ -629,7 +628,6 @@ export default function AiOgiriApp() {
     if (topic.includes('{placeholder}')) return false;
     return true;
   };
-  
   const formatAiComment = (comment) => {
     if (!comment) return "";
     return compactComment(comment);
@@ -1190,7 +1188,6 @@ export default function AiOgiriApp() {
                             )}
                         </div>
                         <button onClick={nextGameRound} disabled={isAdvancingRound} className="px-10 py-4 bg-slate-900 text-white font-bold rounded-full shadow-xl disabled:opacity-60 disabled:cursor-not-allowed">
-                            {/* 次へボタンの表示制御（勝利判定など） */}
                             {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) ? '結果発表へ' :
                              (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
                              (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
