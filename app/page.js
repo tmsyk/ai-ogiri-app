@@ -14,13 +14,12 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.70 (Restored)";
+const APP_VERSION = "Ver 0.71 (Server Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
 
 const UPDATE_LOGS = [
+  { version: "Ver 0.71", date: "2026/01/27", content: ["Pythonサーバーとの通信形式不一致(422エラー)を修正", "通信処理の最適化"] },
   { version: "Ver 0.70", date: "2026/01/27", content: ["消失していたゲーム進行ロジックを完全復元", "安定版"] },
-  { version: "Ver 0.69", date: "2026/01/27", content: ["ゲーム開始処理(initGame)のエラーを修正", "リセット処理を強化"] },
-  { version: "Ver 0.68", date: "2026/01/27", content: ["全機能を正常に統合", "画面表示の不具合修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -248,6 +247,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
+    // 0点は中心。それ以外は 0.2 + 0.8 * (val / max) の割合で描画
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
     return { 
@@ -587,8 +587,91 @@ export default function AiOgiriApp() {
       }
   };
 
-  const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
+  // --- API Calls (Fixed: Using JSON payload for Python Server) ---
+  const callServer = async (endpoint, body) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        return await res.json();
+      } finally {
+        clearTimeout(timeoutId);
+      }
+  };
+
+  const callGeminiFallback = async (prompt) => {
+      try {
+          const res = await fetch('/api/gemini', { 
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ prompt }) 
+          });
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          const json = text.match(/\{[\s\S]*\}/);
+          return json ? JSON.parse(json[0]) : JSON.parse(text);
+      } catch(e) { return null; }
+  };
+
+  const fetchAiTopic = async () => {
+    try {
+        const res = await callServer('/topic', {});
+        return res.topic;
+    } catch (e) {
+        console.warn("Topic server failed:", e);
+        const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
+        const ref = shuffleArray(cleanRef).join("\n");
+        return (await callGeminiFallback(`大喜利のお題を1つ作成。条件:問いかけ形式。名詞一言で回答可能。プレースホルダー禁止。JSON出力{"topic":"..."} 参考:\n${ref}`))?.topic || null;
+    }
+  };
   
+  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
+    try {
+        const res = await callServer('/cards', { count, used_cards: Array.from(usedSet).slice(-20) });
+        const answers = res.answers || [];
+        const unique = getUniqueCards(answers, usedSet);
+        if (unique.length > 0) saveGeneratedCards(unique);
+        return unique;
+    } catch (e) {
+        console.warn("Cards server failed:", e);
+        const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
+        const res = await callGeminiFallback(prompt); 
+        const rawAnswers = res?.answers || []; 
+        const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
+        const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
+        if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
+        return uniqueAnswers; 
+    }
+  };
+
+  const fetchAiJudgment = async (topic, answer, isManual) => {
+    try {
+        const payload = { topic, answer, is_manual: isManual, personality: judgePersonality };
+        return await callServer('/judge', payload);
+    } catch (e) {
+        console.warn("Judge server failed:", e);
+        const radarDesc = "radarは5項目(novelty, clarity, relevance, intelligence, empathy)を0-5で評価";
+        const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
+        return await callGeminiFallback(prompt);
+    }
+  };
+
+  const checkContentSafety = async (text) => { 
+      if (!isAiActive) return false; 
+      try { 
+          const res = await callGeminiFallback(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); 
+          return res?.isInappropriate || false; 
+      } catch (e) { return false; } 
+  };
+
+  const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
   const getUniqueCards = (cards, usedSet) => {
     const unique = [];
     const local = new Set();
@@ -601,77 +684,36 @@ export default function AiOgiriApp() {
     }
     return unique;
   };
-
-  const registerActiveCards = (cards) => {
-    cards.forEach(card => activeCardsRef.current.add(card.text));
-  };
-
+  const registerActiveCards = (cards) => { cards.forEach(card => activeCardsRef.current.add(card.text)); };
   const syncActiveCards = (hands, deck) => {
     const next = new Set();
     hands.flat().forEach(card => next.add(card.text));
     deck.forEach(card => next.add(card.text));
     activeCardsRef.current = next;
   };
-  
-  const syncCardsWrapper = (hands, deck) => {
-      syncActiveCards(hands, deck);
-  };
-
+  const syncCardsWrapper = (hands, deck) => { syncActiveCards(hands, deck); };
   const addCardsToDeck = (cards) => {
     const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
     if (uniqueCards.length === 0) return;
     registerActiveCards(uniqueCards);
     setCardDeck(prev => [...prev, ...uniqueCards]);
   };
-
   const compactComment = (comment, maxLength = 30) => {
     if (!comment) return "";
     const trimmed = comment.toString().trim();
     const split = trimmed.split(/[。！？!?]/);
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
   };
-
-  const checkContentSafety = async (text) => { 
-      if (!isAiActive) return false; 
-      try { 
-          const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); 
-          return res?.isInappropriate || false; 
-      } catch (e) { return false; } 
+  const isTopicClear = (topic) => {
+    if (!topic) return false;
+    if (topic.includes('{placeholder}')) return false;
+    return true;
   };
-
-  const formatAiComment = (comment) => {
-    if (!comment) return "";
-    return compactComment(comment);
-  };
-
-  const handleBackToTitle = () => {
-    if (window.confirm('タイトル画面に戻りますか？')) {
-      playSound('tap'); setIsTimerRunning(false); setAppMode('title');
-    }
-  };
-
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-      playSound('decision');
-    } catch (error) {
-      console.error("Login failed", error);
-      alert("ログインに失敗しました。");
-    }
-  };
-
-  const handleLogout = async () => {
-    if(window.confirm('ログアウトしますか？')) {
-        try {
-            await signOut(auth);
-            playSound('tap');
-        } catch (error) {
-            console.error("Logout failed", error);
-        }
-    }
-  };
-
+  const formatAiComment = (comment) => compactComment(comment);
+  
+  const handleBackToTitle = () => { if (window.confirm('タイトル画面に戻りますか？')) { playSound('tap'); setIsTimerRunning(false); setAppMode('title'); } };
+  const handleLogin = async () => { const provider = new GoogleAuthProvider(); try { await signInWithPopup(auth, provider); playSound('decision'); } catch (error) { console.error("Login failed", error); alert("ログインに失敗しました。"); } };
+  const handleLogout = async () => { if(window.confirm('ログアウトしますか？')) { try { await signOut(auth); playSound('tap'); } catch (error) { console.error("Logout failed", error); } } };
   const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
   const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
   const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
@@ -700,7 +742,6 @@ export default function AiOgiriApp() {
     const newHall = [...hallOfFame, entry].sort((a, b) => b.score - a.score).slice(0, 3);
     setHallOfFame(newHall);
     localStorage.setItem('aiOgiriHallOfFame', JSON.stringify(newHall));
-    
     if (currentUser && !currentUser.isAnonymous) {
         const ref = getUserDocRef(currentUser.uid, 'hall_of_fame');
         if (ref) await setDoc(ref, { entries: newHall }).catch(console.error);
@@ -714,20 +755,15 @@ export default function AiOgiriApp() {
           await runTransaction(db, async (transaction) => {
               const sfDoc = await transaction.get(rankRef);
               let ranks = [];
-              if (sfDoc.exists()) {
-                  ranks = sfDoc.data().score_attack || [];
-              }
+              if (sfDoc.exists()) { ranks = sfDoc.data().score_attack || []; }
               ranks.push(entry);
               ranks.sort((a, b) => b.score - a.score);
               const top10 = ranks.slice(0, 10);
-              
               if (JSON.stringify(ranks) !== JSON.stringify(top10) || ranks.length <= 10) {
                   transaction.set(rankRef, { score_attack: top10 }, { merge: true });
               }
           });
-      } catch (e) {
-          console.error("Global ranking update failed: ", e);
-      }
+      } catch (e) { console.error("Global ranking update failed: ", e); }
   };
 
   const saveGeneratedCards = async (newCards) => {
@@ -739,20 +775,17 @@ export default function AiOgiriApp() {
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
-  
   const saveLearnedTopic = async (newTopic) => {
     if (newTopic.includes('{placeholder}')) return;
     const newLocalData = { ...learned, topics: [...learned.topics, newTopic] };
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
-  
   const saveLearnedAnswer = async (newAnswer) => {
     const newLocalData = { ...learned, goodAnswers: [...learned.goodAnswers, newAnswer] };
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
-  
   const saveAiCommentFeedback = async (comment, isGood) => {
     if (!comment) return;
     const feedbackEntry = { comment, isGood, date: new Date().toISOString() };
@@ -760,7 +793,6 @@ export default function AiOgiriApp() {
     const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 50);
     localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback));
   };
-  
   const resetLearnedData = () => {
     if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
       localStorage.removeItem('aiOgiriLearnedData');
@@ -770,7 +802,6 @@ export default function AiOgiriApp() {
       alert("リセットしました。");
     }
   };
-  
   const updateRanking = async (modeName, value) => {
     setRankings(prev => {
       const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry];
@@ -789,7 +820,6 @@ export default function AiOgiriApp() {
           intelligence: acc.intelligence + (curr.intelligence || 0),
           empathy: acc.empathy + (curr.empathy || 0),
        }), { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 });
-      
       const count = gameRadars.length;
       return {
           novelty: sum.novelty / count,
@@ -838,17 +868,14 @@ export default function AiOgiriApp() {
   const refillHand = async (hand, deck, desiredSize = HAND_SIZE) => {
     let nextHand = [...hand];
     let nextDeck = [...deck];
-    
     while (nextHand.length < desiredSize) {
       if (nextDeck.length === 0) {
         const refill = await collectCards(Math.max(desiredSize - nextHand.length, 5));
         if (refill.length === 0) break; 
         nextDeck = [...nextDeck, ...refill];
       }
-      
       const drawCard = nextDeck.shift();
       if (!drawCard) break;
-      
       const drawText = typeof drawCard === 'string' ? drawCard : drawCard.text;
       if (!nextHand.some(c => (typeof c === 'string' ? c : c.text) === drawText)) {
           nextHand.push(drawCard);
@@ -857,78 +884,14 @@ export default function AiOgiriApp() {
     return { hand: nextHand, deck: nextDeck };
   };
 
-  // --- API Calls ---
-  const callGemini = async (prompt) => {
-      if (!isAiActive) return null;
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-      try {
-          const res = await fetch(`${API_BASE_URL}/judge`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }), signal: controller.signal });
-          if (!res.ok) throw new Error("Server error");
-          return await res.json();
-      } catch (e) {
-          clearTimeout(timeoutId);
-          try {
-              const res = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) });
-              if (!res.ok) throw new Error();
-              const data = await res.json();
-              const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-              const json = text.match(/\{[\s\S]*\}/);
-              return json ? JSON.parse(json[0]) : JSON.parse(text);
-          } catch(e2) { return null; }
-      }
-  };
-
-  const fetchAiTopic = async () => {
-    const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
-    const ref = shuffleArray(cleanRef).join("\n");
-    return (await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."} 参考:\n${ref}`))?.topic || null;
-  };
-  
-  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
-    const prompt = `大喜利の回答カード（単語・短いフレーズ）を${count}個作成。条件: 1.実在する言葉 2.インパクト強ければ"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
-    const res = await callGemini(prompt); 
-    const rawAnswers = res?.answers || []; 
-    const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
-    const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
-    if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
-    return uniqueAnswers; 
-  };
-
-  const fetchAiJudgment = async (topic, answer, isManual) => {
-    const radarDesc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）";
-    let personalityPrompt = "";
-    switch(judgePersonality) {
-        case 'strict': personalityPrompt = "あなたは超激辛審査員です。"; break;
-        case 'gal': personalityPrompt = "あなたはギャルです。"; break;
-        case 'chuuni': personalityPrompt = "あなたは厨二病です。"; break;
-        default: personalityPrompt = "あなたはノリの良いお笑い審査員です。"; break;
-    }
-    const p = isManual ? `${personalityPrompt} お題:${topic} 回答:${answer} 1.不適切チェック 2.採点(0-100) 3.ツッコミ 4.${radarDesc} 出力JSON: {"score":0, "comment":"...", "radar":{...}}` : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 甘めに。 4.鋭いツッコミ 出力:{"score":0,"comment":"...","radar":{...}}`;
-    return await callGemini(p);
-  };
-
-  // --- Game Flow Functions ---
-  const startRound = (turn) => {
-      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
-      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
-      setIsAdvancingRound(false);
-      setTurnPlayerIndex(turn); 
-      
-      if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
-          generateTopic(true);
-      } else {
-          setGamePhase('master_topic');
-      }
-  };
-
+  // --- Game Flow ---
   const generateTopic = async (auto = false) => {
       if (isGeneratingTopic) return;
       setIsGeneratingTopic(true);
       let t = "";
       try {
-          const res = await callGemini(`大喜利のお題を1つ作成。条件:問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{"topic":"..."}`);
-          t = res?.topic || FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)];
+          t = await fetchAiTopic();
+          if (!t) throw new Error("No topic generated");
           if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
       } catch (e) { t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; }
 
@@ -958,6 +921,19 @@ export default function AiOgiriApp() {
         setGamePhase('answer_input');
         if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     } else prepareNextSubmitter(masterIndex, masterIndex, players);
+  };
+
+  const startRound = (turn) => {
+      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
+      setIsAdvancingRound(false);
+      setTurnPlayerIndex(turn); 
+      
+      if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
+          generateTopic(true);
+      } else {
+          setGamePhase('master_topic');
+      }
   };
 
   const initGame = async () => {
@@ -1022,9 +998,7 @@ export default function AiOgiriApp() {
       playSound('tap');
       if (isAdvancingRound) return;
       setIsAdvancingRound(true);
-      
       setGamePhase('drawing');
-
       setTimeout(() => {
         if (gameConfig.mode === 'single') {
             if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
@@ -1033,7 +1007,6 @@ export default function AiOgiriApp() {
         } else {
             if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
         }
-        
         setCurrentRound(r => r + 1);
         const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
         setMasterIndex(nextMaster);
@@ -1064,7 +1037,7 @@ export default function AiOgiriApp() {
                 distance = res.distance || 0.5; reasoning = res.reasoning || "";
             } else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
-      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー"; radar = {novelty:3,clarity:3,relevance:3,intelligence:3,empathy:3}; }
+      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {novelty:3,clarity:3,relevance:3,intelligence:3,empathy:3}; }
       
       setAiComment(formatAiComment(comment));
       if (radar) { updateUserStats(score, radar); setGameRadars(prev => [...prev, radar]); }
@@ -1121,58 +1094,21 @@ export default function AiOgiriApp() {
   const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
   const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
 
-  // --- Effect Hooks ---
-  useEffect(() => {
-    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
-    if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
-    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
-    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
-    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
-    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
-    
-    if (auth) { 
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            setCurrentUser(u);
-            if (u && !u.isAnonymous) {
-                try {
-                    const statsRef = getUserDocRef(u.uid, 'stats');
-                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
-                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
-                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
-                } catch (e) { console.error("Data sync error:", e); }
-            }
-        });
-        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
-        return () => unsub();
-    }
-  }, []);
-
-  useEffect(() => {
-      if (!db) return;
-      const rankRef = getDocRef('shared_db', 'global_ranking');
-      if (rankRef) {
-          const unsub = onSnapshot(rankRef, (doc) => {
-              if (doc.exists()) {
-                  setGlobalRankings(doc.data().score_attack || []);
-              }
-          });
-          return () => unsub();
-      }
-  }, []);
-
-  useEffect(() => { let t; if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000); else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); } return () => clearInterval(t); }, [isTimerRunning, timeLeft]);
-  useEffect(() => { let t; if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) { t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100); } return () => clearInterval(t); }, [appMode, startTime, finishTime]);
-  useEffect(() => { if (!isAiActive || appMode !== 'game') return; if (cardDeck.length >= HAND_SIZE * 2) return; const now = Date.now(); if (now - lastCardFetchRef.current < 5000) return; lastCardFetchRef.current = now; fetchAiCards(HAND_SIZE).then(addCardsToDeck); }, [appMode, cardDeck.length, isAiActive]);
-
+  // --- Render ---
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20" style={{backgroundImage: 'url("/background.png")', backgroundSize: 'cover', backgroundAttachment: 'fixed'}}>
        <header className="bg-white/90 backdrop-blur-sm border-b p-4 flex justify-between items-center sticky top-0 z-30">
           <h1 className="font-bold text-slate-800 flex items-center gap-2"><MessageSquare className="text-indigo-600"/> AI大喜利</h1>
-          <div className="flex gap-2">
-              <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
-              {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
+          <div className="flex items-center gap-4">
+              {gamePhase !== 'drawing' && totalZabuton > 0 && (
+                  <div className="flex items-center gap-1 bg-yellow-100 px-3 py-1 rounded-full text-xs font-bold text-yellow-800">
+                      <div className="w-4 h-3 bg-yellow-500 rounded-sm shadow-sm"></div>×{totalZabuton}
+                  </div>
+              )}
+              <div className="flex gap-2">
+                <button onClick={() => setActiveModal('settings')} className="p-2 bg-slate-100 rounded-full"><Settings className="w-5 h-5"/></button>
+                {appMode !== 'title' && <button onClick={handleBackToTitle} className="p-2 bg-slate-100 rounded-full"><Home className="w-5 h-5"/></button>}
+              </div>
           </div>
        </header>
 
@@ -1321,7 +1257,6 @@ export default function AiOgiriApp() {
                     <div className="text-center animate-in zoom-in">
                         <div className="bg-white/95 backdrop-blur-sm p-6 rounded-3xl shadow-xl mb-6">
                             <p className="text-sm text-slate-400 font-bold mb-2">お題</p>
-                            {/* お題表示をシンプルに */}
                             <p className="text-lg font-bold mb-6">{currentTopic}</p>
                             <div className="border-t border-slate-100 my-4"></div>
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
