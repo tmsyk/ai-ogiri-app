@@ -57,7 +57,7 @@ class JudgeRequest(BaseModel):
     topic: str
     answer: str
     is_manual: bool = False
-    personality: str = "logic"  # デフォルトを理論派に
+    personality: str = "standard"
 
 # --- 内部関数: コサイン類似度計算 ---
 def calculate_cosine_similarity(vec1, vec2):
@@ -67,11 +67,26 @@ def calculate_cosine_similarity(vec1, vec2):
     norm_b = np.linalg.norm(vec2)
     return dot_product / (norm_a * norm_b)
 
+# --- ★新規追加: 意味的距離によるスコア補正係数の算出 ---
+def get_distance_multiplier(similarity):
+    """
+    逆U字型仮説に基づくスコア補正係数を返す
+    0.4 - 0.6 (Sweet Spot): 1.2倍 (ボーナス)
+    0.2 - 0.8 (Normal): 1.0倍 (そのまま)
+    それ以外 (Too Close / Too Far): 0.8倍 (ペナルティ)
+    """
+    if 0.4 <= similarity <= 0.6:
+        return 1.2
+    elif 0.2 < similarity < 0.8:
+        return 1.0
+    else:
+        return 0.8
+
 # --- APIエンドポイント ---
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server is running (Theory Edition)"}
+    return {"status": "ok", "message": "AI Ogiri Server is running (Theory Edition v2)"}
 
 @app.post("/api/topic")
 def generate_topic():
@@ -110,6 +125,7 @@ def generate_cards(req: CardRequest):
 def judge_answer(req: JudgeRequest):
     similarity = 0.5
     distance_eval = "Unknown"
+    multiplier = 1.0
 
     # 1. API経由でベクトル類似度を計算
     try:
@@ -130,7 +146,9 @@ def judge_answer(req: JudgeRequest):
         )
         similarity = float(similarity)
 
-        # 距離感の判定テキスト
+        # 距離感の判定と補正係数の決定
+        multiplier = get_distance_multiplier(similarity)
+
         if 0.4 <= similarity <= 0.6:
             distance_eval = "Sweet Spot (絶妙)"
         elif similarity > 0.8:
@@ -153,8 +171,7 @@ def judge_answer(req: JudgeRequest):
     }
     personality_prompt = personas.get(req.personality, personas["logic"])
 
-    # 3. Geminiによる評価
-    # 重要：ここをJS側の新しい5項目に合わせる
+    # 3. Geminiによる評価 (JS側の5項目に合わせる)
     radar_desc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）"
 
     prompt = f"""
@@ -185,10 +202,25 @@ def judge_answer(req: JudgeRequest):
         )
         result = json.loads(response.text)
         
-        # 計算した類似度を結果に追加
+        # ★ここで定量的補正を適用
+        # AIが出した点数に、ベクトル計算に基づく係数(multiplier)を掛ける
+        radar = result.get("radar", {})
+        for key in radar:
+            original_score = radar[key]
+            # 係数を掛け、四捨五入し、0-5の範囲に収める
+            new_score = round(original_score * multiplier)
+            radar[key] = max(0, min(5, new_score))
+        
+        result["radar"] = radar
         result["distance"] = similarity
+        # 解説にも補正情報を追記
+        if multiplier > 1.0:
+            result["reasoning"] += " (★Sweet Spotボーナス適用)"
+        elif multiplier < 1.0:
+            result["reasoning"] += " (▼距離感ペナルティ適用)"
         
         return result
+
     except Exception as e:
         print(f"Judge Error: {e}")
         return {
