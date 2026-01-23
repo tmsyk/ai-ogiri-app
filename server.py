@@ -4,13 +4,17 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
-from google.genai import types
 import json
 import numpy as np
 
 # --- 設定 ---
 # 環境変数から取得するロジック
 API_KEY = os.environ.get("GEMINI_API_KEY")
+
+if not API_KEY:
+    # ローカルテスト用（必要に応じて書き換えてください。Gitには上げないでください）
+    # API_KEY = "AIzaSy..." 
+    pass
 
 if not API_KEY:
     print("エラー: APIキーが設定されていません。環境変数 GEMINI_API_KEY を設定してください。")
@@ -53,7 +57,7 @@ class JudgeRequest(BaseModel):
     topic: str
     answer: str
     is_manual: bool = False
-    personality: str = "standard"
+    personality: str = "logic"  # デフォルトを理論派に
 
 # --- 内部関数: コサイン類似度計算 ---
 def calculate_cosine_similarity(vec1, vec2):
@@ -67,7 +71,7 @@ def calculate_cosine_similarity(vec1, vec2):
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server is running (Lightweight Mode)"}
+    return {"status": "ok", "message": "AI Ogiri Server is running (Theory Edition)"}
 
 @app.post("/api/topic")
 def generate_topic():
@@ -107,7 +111,7 @@ def judge_answer(req: JudgeRequest):
     similarity = 0.5
     distance_eval = "Unknown"
 
-    # 1. API経由でベクトル類似度を計算 (サーバーのメモリを使わない)
+    # 1. API経由でベクトル類似度を計算
     try:
         # お題と回答をベクトル化
         result_topic = client.models.embed_content(
@@ -124,7 +128,7 @@ def judge_answer(req: JudgeRequest):
             result_topic.embeddings[0].values,
             result_answer.embeddings[0].values
         )
-        similarity = float(similarity) # numpy float -> python float
+        similarity = float(similarity)
 
         # 距離感の判定テキスト
         if 0.4 <= similarity <= 0.6:
@@ -138,19 +142,20 @@ def judge_answer(req: JudgeRequest):
 
     except Exception as e:
         print(f"Embedding Error: {e}")
-        # エラーでも採点自体は止めない
 
     # 2. 審査員ペルソナの設定
     personas = {
+        "logic": "あなたは「論理派のお笑い評論家」です。笑いの構造を分解し、論理的に審査します。",
         "strict": "あなたは激辛審査員です。採点は厳しく（基準より-10点）、辛辣なコメントをします。",
         "gal": "あなたはギャル審査員です。「ウケる」「それな」などの若者言葉でノリよく採点します。",
         "chuuni": "あなたは厨二病審査員です。闇の炎や禁断の力に例えて大げさにコメントします。",
         "standard": "あなたは「ノリの良いお笑い審査員」です。"
     }
-    personality_prompt = personas.get(req.personality, personas["standard"])
+    personality_prompt = personas.get(req.personality, personas["logic"])
 
     # 3. Geminiによる評価
-    radar_desc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を0-5で厳正に評価（3が標準）"
+    # 重要：ここをJS側の新しい5項目に合わせる
+    radar_desc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）"
 
     prompt = f"""
     {personality_prompt}
@@ -161,7 +166,7 @@ def judge_answer(req: JudgeRequest):
     [分析データ]: お題との意味的類似度は {similarity:.4f} です（1.0に近いほど似ている）。判定は「{distance_eval}」です。
 
     # 評価ルール
-    1. 類似度が0.4〜0.6付近（Sweet Spot）の回答は「適度なズレ」として高く評価してください。
+    1. 類似度が0.4〜0.6付近（Sweet Spot）の回答は「適度なズレ（不突合の解決）」として高く評価してください。
     2. 類似度が高すぎる（0.8以上）は「ひねりがない」、低すぎる（0.2以下）は「無関係」として減点対象ですが、面白い場合は救済してください。
     3. {radar_desc}
     4. 「reasoning」には、類似度の観点を含めた論理的な解説を記述してください。
@@ -169,7 +174,7 @@ def judge_answer(req: JudgeRequest):
     出力JSON: {{
         "comment": "15文字程度のツッコミ",
         "reasoning": "100文字程度の解説",
-        "radar": {{"surprise":3, "context":3, "punchline":3, "humor":3, "intelligence":3}}
+        "radar": {{"novelty":3, "clarity":3, "relevance":3, "intelligence":3, "empathy":3}}
     }}
     """
 
@@ -190,7 +195,7 @@ def judge_answer(req: JudgeRequest):
             "comment": "審査中にエラーが起きたみたいやわ...",
             "reasoning": "AIとの通信に失敗しました。",
             "distance": similarity,
-            "radar": {"surprise":1, "context":1, "punchline":1, "humor":1, "intelligence":1}
+            "radar": {"novelty":1, "clarity":1, "relevance":1, "intelligence":1, "empathy":1}
         }
 
 if __name__ == "__main__":

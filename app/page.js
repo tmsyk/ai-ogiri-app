@@ -6,19 +6,20 @@ import {
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
-  VolumeX, PieChart, Activity, LogOut, Flame, Smile, GraduationCap, Microscope 
+  VolumeX, PieChart, Activity, LogOut, Flame, Smile, GraduationCap, Microscope,
+  Scale 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.57 (Logic Edition)";
+const APP_VERSION = "Ver 0.61";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.57", date: "2026/01/27", content: ["計算論的ユーモア理論に基づく評価軸を完全適用", "意味的距離ゲージのUI実装"] },
-  { version: "Ver 0.56", date: "2026/01/27", content: ["クラウド上のPythonサーバーと連携開始", "サーバー応答なし時の自動バックアップ機能実装"] },
+  { version: "Ver 0.61", date: "2026/01/27", content: ["お笑いタイプ診断機能を追加", "ゲーム再開時の進行不能バグを修正", "お題作成ボタンの動作を改善"] },
+  { version: "Ver 0.60", date: "2026/01/27", content: ["計算論的ユーモア理論に基づく5つの評価指標を導入", "意味的距離ゲージの調整"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -32,11 +33,11 @@ const HAND_SIZE = 8;
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-const API_TIMEOUT_MS = 20000;
+const API_TIMEOUT_MS = 25000;
 
 // 審査員タイプ定義
 const JUDGES = {
-  logic: { name: "理論派（辛口）", icon: Microscope, desc: "笑いの構造を論理的に分析し、厳格に採点します。" },
+  logic: { name: "理論派審査員", icon: Microscope, desc: "ユーモアの構造（不突合と解決）を分析し、5つの指標で厳格に採点します。" },
   standard: { name: "標準（関西弁）", icon: MessageSquare, desc: "ノリの良い関西弁でツッコミます。" },
   strict: { name: "激辛（毒舌）", icon: Flame, desc: "採点が厳しく、辛辣なコメントをします。" },
   gal: { name: "ギャル", icon: Sparkles, desc: "ノリとバイブスで採点します。" },
@@ -49,6 +50,11 @@ const FALLBACK_TOPICS = [
   "桃太郎が鬼ヶ島へ行くのをやめた理由とは？",
   "上司への謝罪メール、件名に入れると許される言葉とは？",
   "実は地球は何でできている？",
+  "AIが人間に反乱を起こした意外な理由とは？",
+  "「全米が泣いた」映画の衝撃のラストシーンに映ったものとは？",
+  "そんなことで警察を呼ぶな！現場にあったものとは？",
+  "コンビニの店員が突然キレた原因とは？",
+  "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
 ];
 
 const FALLBACK_ANSWERS = [
@@ -102,6 +108,32 @@ const formatTime = (ms) => {
   const seconds = Math.floor((ms % 60000) / 1000);
   const milliseconds = Math.floor((ms % 1000) / 10);
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
+};
+
+// タイプ診断ロジック
+const analyzeType = (radar) => {
+    if (!radar) return "判定不能";
+    // キーが存在しない場合のフォールバック（古いデータ対応）
+    const novelty = radar.novelty || radar.surprise || 0;
+    const clarity = radar.clarity || radar.context || 0;
+    const relevance = radar.relevance || radar.punchline || 0;
+    const intelligence = radar.intelligence || radar.humor || 0;
+    const empathy = radar.empathy || radar.intelligence || 0; // 旧intelligenceはempathyに近いとする
+
+    const total = novelty + clarity + relevance + intelligence + empathy;
+    const maxVal = Math.max(novelty, clarity, relevance, intelligence, empathy);
+
+    if (total >= 22) return "お笑い完全生命体";
+    if (total <= 8) return "伸びしろしかない新人";
+
+    // 最も高い値で判定
+    if (maxVal === novelty) return "孤高のシュール職人";
+    if (maxVal === clarity) return "伝わりやすさの鬼";
+    if (maxVal === relevance) return "文脈を操る魔術師";
+    if (maxVal === intelligence) return "インテリジェンスの覇者";
+    if (maxVal === empathy) return "共感のカリスマ";
+    
+    return "バランスの取れたオールラウンダー";
 };
 
 // --- Web Audio API Helper ---
@@ -162,10 +194,8 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
   );
 };
 
-// 6次元レーダーチャート（新評価軸）
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
-  // 計算論的ユーモア理論に基づく5指標
   const labels = ["新規性", "明瞭性", "関連性", "知性", "共感性"]; 
   const keys = ["novelty", "clarity", "relevance", "intelligence", "empathy"];
   
@@ -209,16 +239,16 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   );
 };
 
-// 意味的距離ゲージ（Sweet Spot Visualization）
+// 意味的距離ゲージ
 const SemanticDistanceGauge = ({ distance }) => {
   let label = "";
   let colorClass = "";
-  let position = distance * 100; // 0-100%
+  let position = distance * 100;
 
-  if (distance > 0.75) {
+  if (distance > 0.8) {
       label = "ベタすぎ！(Boring)";
       colorClass = "bg-blue-400";
-  } else if (distance < 0.25) {
+  } else if (distance < 0.2) {
       label = "飛びすぎ！(Nonsense)";
       colorClass = "bg-red-400";
   } else {
@@ -234,10 +264,7 @@ const SemanticDistanceGauge = ({ distance }) => {
         <span>Close (Boring)</span>
       </div>
       <div className="h-4 bg-slate-200 rounded-full relative overflow-hidden">
-         {/* Sweet Spot Zone (0.4-0.6) */}
          <div className="absolute top-0 bottom-0 bg-green-200/50" style={{ left: '40%', width: '20%' }}></div>
-         
-         {/* Indicator */}
          <div 
            className={`absolute top-0 bottom-0 w-2 h-4 rounded-full border-2 border-white shadow-sm transition-all duration-1000 ${colorClass}`}
            style={{ left: `${Math.min(Math.max(position, 0), 98)}%` }}
@@ -307,23 +334,34 @@ const MyDataModal = ({ stats, onClose, userName }) => {
   const getTotalAverage = () => {
     const count = stats.playCount || 1;
     const total = stats.totalRadar || stats.averageRadar || { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 };
-    if (stats.totalRadar) {
-        return {
-          novelty: (total.novelty || total.surprise || 0) / count,
-          clarity: (total.clarity || total.context || 0) / count,
-          relevance: (total.relevance || total.punchline || 0) / count,
-          intelligence: (total.intelligence || total.humor || 0) / count,
-          empathy: (total.empathy || total.intelligence || 0) / count,
-        };
-    }
-    return total;
+    // 古いデータ形式も考慮しつつ平均を計算
+    const result = {
+      novelty: (total.novelty || total.surprise || 0) / count,
+      clarity: (total.clarity || total.context || 0) / count,
+      relevance: (total.relevance || total.punchline || 0) / count,
+      intelligence: (total.intelligence || total.humor || 0) / count,
+      empathy: (total.empathy || total.intelligence || 0) / count,
+    };
+    return result;
   };
+
+  const avgData = getTotalAverage();
+  const typeDiagnosis = analyzeType(avgData);
 
   return (
     <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
         <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
         <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-10"><p className="text-sm font-bold text-indigo-800 mb-4 flex items-center gap-2"><PieChart className="w-4 h-4"/> あなたの芸風分析（平均）</p>{stats.playCount > 0 ? ( <RadarChart data={getTotalAverage()} size={200} maxValue={5} /> ) : ( <p className="text-xs text-slate-400 py-8">まだデータがありません</p> )}</div>
+        
+        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-8 mt-4">
+            <p className="text-sm font-bold text-indigo-800 mb-2 flex items-center gap-2"><PieChart className="w-4 h-4"/> 芸風分析</p>
+            <RadarChart data={avgData} size={200} maxValue={5} />
+            
+            <div className="mt-6 bg-white p-3 rounded-xl w-full text-center shadow-sm">
+                <p className="text-xs text-slate-400 mb-1">あなたのタイプ</p>
+                <p className="text-lg font-black text-indigo-600">{typeDiagnosis}</p>
+            </div>
+        </div>
     </ModalBase>
   );
 };
@@ -408,7 +446,7 @@ const InfoModal = ({ onClose, type }) => (
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
-  const [judgePersonality, setJudgePersonality] = useState('logic'); // デフォルトを理論派に
+  const [judgePersonality, setJudgePersonality] = useState('logic'); 
   const [multiNames, setMultiNames] = useState(["プレイヤー1", "プレイヤー2", "プレイヤー3"]);
   const [userName, setUserName] = useState("あなた");
   const [volume, setVolume] = useState(0.5);
@@ -717,8 +755,8 @@ export default function AiOgiriApp() {
   }, [appMode, cardDeck.length, isAiActive]);
 
   const callGemini = async (prompt) => {
-      // タイムアウト設定付きのFetch
       if (!isAiActive) return null;
+      // Pythonバックエンドが動いていればそちらを使う
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
       
@@ -753,9 +791,10 @@ export default function AiOgiriApp() {
           }
       }
   };
+  
   const checkContentSafety = async (text) => { if (!isAiActive) return false; try { const res = await callGemini(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); return res?.isInappropriate || false; } catch (e) { return false; } };
+  
   const fetchAiTopic = async () => {
-    // 穴埋めではない参考トピックのみを使用
     const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
     const ref = shuffleArray(cleanRef).join("\n");
     return (await callGemini(`大喜利のお題を1つ作成。
@@ -767,6 +806,7 @@ export default function AiOgiriApp() {
     参考(これらのような形式で):
     ${ref}`))?.topic || null;
   };
+  
   const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
     const prompt = `
     大喜利の回答カード（単語・短いフレーズ）を${count}個作成。
@@ -786,8 +826,9 @@ export default function AiOgiriApp() {
     if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
     return uniqueAnswers;
   };
+  
   const fetchAiJudgment = async (topic, answer, isManual) => {
-    const radarDesc = "radarは5項目(surprise:意外性, context:文脈, punchline:瞬発力, humor:毒気, intelligence:知性)を0-5で厳正に評価（3が標準）";
+    const radarDesc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）";
     
     // 審査員の性格によるプロンプト分岐
     let personalityPrompt = "";
@@ -809,8 +850,8 @@ export default function AiOgiriApp() {
 3. ツッコミは15文字程度の短い一言で。
 4. ${radarDesc}
 
-出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`
-      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 レーダーチャートの合計(0-25)に基づいて算出されるため、各項目を0-5で厳正に評価。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"surprise":3,"context":3,"punchline":3,"humor":3,"intelligence":3}}`;
+出力JSON形式: {"score":0, "comment":"...", "isInappropriate": false, "radar":{"novelty":3,"clarity":3,"relevance":3,"intelligence":3,"empathy":3}}`
+      : `お題:${topic} 回答:${answer} 1.不適切チェック不要 2.${radarDesc} 3.採点 レーダーチャートの合計(0-25)に基づいて算出されるため、各項目を0-5で厳正に評価。 4.鋭いツッコミ、または気の利いた一言(10〜20文字程度) 出力:{"score":0,"comment":"...","isInappropriate":false,"radar":{"novelty":3,"clarity":3,"relevance":3,"intelligence":3,"empathy":3}}`;
     return await callGemini(p);
   };
 
@@ -880,8 +921,20 @@ export default function AiOgiriApp() {
 
   // --- Game Control ---
   const initGame = async () => {
-      playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); setIsSurvivalGameOver(false); setStartTime(null); setFinishTime(null);
+      playSound('decision'); 
+      setAppMode('game'); 
+      setGamePhase('drawing'); 
+      setCurrentRound(1); 
+      setAnswerCount(0); 
+      setIsSurvivalGameOver(false); 
+      setIsJudging(false);
+      setIsAdvancingRound(false);
+      setStartTime(null); 
+      setFinishTime(null);
+      
       setGameRadars([]); 
+      setTotalZabuton(0);
+      
       if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
       
       activeCardsRef.current = new Set();
@@ -1032,11 +1085,11 @@ export default function AiOgiriApp() {
             if (res) {
                 // レーダーチャートの合計値からスコアを算出（各5点満点×5項目＝25点満点 → ×4で100点満点）
                 const totalRadarScore = 
-                    (res.radar.surprise || 0) + 
-                    (res.radar.context || 0) + 
-                    (res.radar.punchline || 0) + 
-                    (res.radar.humor || 0) + 
-                    (res.radar.intelligence || 0);
+                    (res.radar.novelty || 0) + 
+                    (res.radar.clarity || 0) + 
+                    (res.radar.relevance || 0) + 
+                    (res.radar.intelligence || 0) + 
+                    (res.radar.empathy || 0);
                 score = totalRadarScore * 4;
                 comment = res.comment; 
                 radar = res.radar; 
