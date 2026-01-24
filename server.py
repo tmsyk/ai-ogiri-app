@@ -4,25 +4,25 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
+# typesモジュールをインポート
+from google.genai import types
 import json
 import numpy as np
 
 # --- 設定 ---
-# 環境変数から取得するロジック
 API_KEY = os.environ.get("GEMINI_API_KEY")
 
 if not API_KEY:
-    # ローカルテスト用（必要に応じて書き換えてください。Gitには上げないでください）
+    # ローカルテスト用（Gitには上げないでください）
     # API_KEY = "AIzaSy..." 
     pass
 
 if not API_KEY:
-    print("エラー: APIキーが設定されていません。環境変数 GEMINI_API_KEY を設定してください。")
+    print("エラー: APIキーが設定されていません。")
     
 # --- 初期化 ---
 app = FastAPI()
 
-# CORS設定
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -33,14 +33,9 @@ app.add_middleware(
 
 print("Initializing Gemini Client...")
 try:
-    # Gemini Client
     client = genai.Client(api_key=API_KEY)
-    
-    # テキスト生成モデル
     GEN_MODEL_NAME = 'gemini-2.0-flash'
-    # ベクトル埋め込みモデル（軽量・高速）
     EMBED_MODEL_NAME = 'text-embedding-004'
-    
     print("Client initialized successfully!")
 except Exception as e:
     print(f"Initialization error: {e}")
@@ -57,36 +52,25 @@ class JudgeRequest(BaseModel):
     topic: str
     answer: str
     is_manual: bool = False
-    personality: str = "standard"
+    personality: str = "logic"
 
-# --- 内部関数: コサイン類似度計算 ---
+# --- 内部関数 ---
 def calculate_cosine_similarity(vec1, vec2):
-    # numpyを使って計算
     dot_product = np.dot(vec1, vec2)
     norm_a = np.linalg.norm(vec1)
     norm_b = np.linalg.norm(vec2)
     return dot_product / (norm_a * norm_b)
 
-# --- ★新規追加: 意味的距離によるスコア補正係数の算出 ---
 def get_distance_multiplier(similarity):
-    """
-    逆U字型仮説に基づくスコア補正係数を返す
-    0.4 - 0.6 (Sweet Spot): 1.2倍 (ボーナス)
-    0.2 - 0.8 (Normal): 1.0倍 (そのまま)
-    それ以外 (Too Close / Too Far): 0.8倍 (ペナルティ)
-    """
-    if 0.4 <= similarity <= 0.6:
-        return 1.2
-    elif 0.2 < similarity < 0.8:
-        return 1.0
-    else:
-        return 0.8
+    if 0.4 <= similarity <= 0.6: return 1.2
+    elif 0.2 < similarity < 0.8: return 1.0
+    else: return 0.8
 
 # --- APIエンドポイント ---
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server is running (Theory Edition v2)"}
+    return {"status": "ok", "message": "AI Ogiri Server (Fixed Similarity)"}
 
 @app.post("/api/topic")
 def generate_topic():
@@ -129,24 +113,28 @@ def judge_answer(req: JudgeRequest):
 
     # 1. API経由でベクトル類似度を計算
     try:
-        # お題と回答をベクトル化
+        # ★修正ポイント: task_typeを指定して純粋な意味的類似度を測る
         result_topic = client.models.embed_content(
             model=EMBED_MODEL_NAME,
-            contents=req.topic
+            contents=req.topic,
+            config=types.EmbedContentConfig(
+                task_type="SEMANTIC_SIMILARITY" 
+            )
         )
         result_answer = client.models.embed_content(
             model=EMBED_MODEL_NAME,
-            contents=req.answer
+            contents=req.answer,
+            config=types.EmbedContentConfig(
+                task_type="SEMANTIC_SIMILARITY"
+            )
         )
         
-        # 類似度計算
         similarity = calculate_cosine_similarity(
             result_topic.embeddings[0].values,
             result_answer.embeddings[0].values
         )
         similarity = float(similarity)
 
-        # 距離感の判定と補正係数の決定
         multiplier = get_distance_multiplier(similarity)
 
         if 0.4 <= similarity <= 0.6:
@@ -161,7 +149,7 @@ def judge_answer(req: JudgeRequest):
     except Exception as e:
         print(f"Embedding Error: {e}")
 
-    # 2. 審査員ペルソナの設定
+    # 2. 審査員ペルソナ
     personas = {
         "logic": "あなたは「論理派のお笑い評論家」です。笑いの構造を分解し、論理的に審査します。",
         "strict": "あなたは激辛審査員です。採点は厳しく（基準より-10点）、辛辣なコメントをします。",
@@ -171,7 +159,7 @@ def judge_answer(req: JudgeRequest):
     }
     personality_prompt = personas.get(req.personality, personas["logic"])
 
-    # 3. Geminiによる評価 (JS側の5項目に合わせる)
+    # 3. Geminiによる評価
     radar_desc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）"
 
     prompt = f"""
@@ -202,25 +190,18 @@ def judge_answer(req: JudgeRequest):
         )
         result = json.loads(response.text)
         
-        # ★ここで定量的補正を適用
-        # AIが出した点数に、ベクトル計算に基づく係数(multiplier)を掛ける
+        # 定量的補正
         radar = result.get("radar", {})
         for key in radar:
-            original_score = radar[key]
-            # 係数を掛け、四捨五入し、0-5の範囲に収める
-            new_score = round(original_score * multiplier)
+            new_score = round(radar[key] * multiplier)
             radar[key] = max(0, min(5, new_score))
         
         result["radar"] = radar
         result["distance"] = similarity
-        # 解説にも補正情報を追記
-        if multiplier > 1.0:
-            result["reasoning"] += " (★Sweet Spotボーナス適用)"
-        elif multiplier < 1.0:
-            result["reasoning"] += " (▼距離感ペナルティ適用)"
+        if multiplier > 1.0: result["reasoning"] += " (★Sweet Spotボーナス)"
+        elif multiplier < 1.0: result["reasoning"] += " (▼距離感ペナルティ)"
         
         return result
-
     except Exception as e:
         print(f"Judge Error: {e}")
         return {
