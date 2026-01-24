@@ -4,7 +4,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from google import genai
-# typesモジュールをインポート
 from google.genai import types
 import json
 import numpy as np
@@ -42,7 +41,8 @@ except Exception as e:
 
 # --- リクエスト型定義 ---
 class TopicRequest(BaseModel):
-    pass
+    # 学習済み（良問）のお題リストを受け取る
+    reference_topics: list[str] = []
 
 class CardRequest(BaseModel):
     count: int = 10
@@ -53,6 +53,8 @@ class JudgeRequest(BaseModel):
     answer: str
     is_manual: bool = False
     personality: str = "logic"
+    # 過去の審査コメントへのフィードバックを受け取る
+    feedback_logs: list[str] = []
 
 # --- 内部関数 ---
 def calculate_cosine_similarity(vec1, vec2):
@@ -70,11 +72,29 @@ def get_distance_multiplier(similarity):
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server (Fixed Similarity)"}
+    return {"status": "ok", "message": "AI Ogiri Server (Learning Enabled)"}
 
 @app.post("/api/topic")
-def generate_topic():
-    prompt = "大喜利のお題を1つ作成してください。条件: 問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言。プレースホルダーは禁止。JSON出力{\"topic\":\"...\"}"
+def generate_topic(req: TopicRequest):
+    # 参考お題がある場合はプロンプトに含める
+    ref_text = ""
+    if req.reference_topics:
+        ref_sample = "\n".join(req.reference_topics[:5]) # 最大5件
+        ref_text = f"以下はユーザーが高く評価したお題の例です。これらと似たテイストや形式を意識してください:\n{ref_sample}"
+
+    prompt = f"""
+    大喜利のお題を1つ作成してください。
+    
+    条件: 
+    1. 問いかけ形式（「〜とは？」「〜は？」）。
+    2. 回答は名詞一言でボケられるもの。
+    3. プレースホルダー（穴埋め）は禁止。
+    
+    {ref_text}
+    
+    JSON出力: {{"topic":"..."}}
+    """
+    
     try:
         response = client.models.generate_content(
             model=GEN_MODEL_NAME, contents=prompt,
@@ -113,20 +133,15 @@ def judge_answer(req: JudgeRequest):
 
     # 1. API経由でベクトル類似度を計算
     try:
-        # ★修正ポイント: task_typeを指定して純粋な意味的類似度を測る
         result_topic = client.models.embed_content(
             model=EMBED_MODEL_NAME,
             contents=req.topic,
-            config=types.EmbedContentConfig(
-                task_type="SEMANTIC_SIMILARITY" 
-            )
+            config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
         )
         result_answer = client.models.embed_content(
             model=EMBED_MODEL_NAME,
             contents=req.answer,
-            config=types.EmbedContentConfig(
-                task_type="SEMANTIC_SIMILARITY"
-            )
+            config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
         )
         
         similarity = calculate_cosine_similarity(
@@ -137,14 +152,10 @@ def judge_answer(req: JudgeRequest):
 
         multiplier = get_distance_multiplier(similarity)
 
-        if 0.4 <= similarity <= 0.6:
-            distance_eval = "Sweet Spot (絶妙)"
-        elif similarity > 0.8:
-            distance_eval = "Too Close (近すぎ)"
-        elif similarity < 0.2:
-            distance_eval = "Too Far (遠すぎ)"
-        else:
-            distance_eval = "Normal"
+        if 0.4 <= similarity <= 0.6: distance_eval = "Sweet Spot (絶妙)"
+        elif similarity > 0.8: distance_eval = "Too Close (近すぎ)"
+        elif similarity < 0.2: distance_eval = "Too Far (遠すぎ)"
+        else: distance_eval = "Normal"
 
     except Exception as e:
         print(f"Embedding Error: {e}")
@@ -159,11 +170,24 @@ def judge_answer(req: JudgeRequest):
     }
     personality_prompt = personas.get(req.personality, personas["logic"])
 
-    # 3. Geminiによる評価
+    # 3. フィードバック履歴の反映
+    feedback_text = ""
+    if req.feedback_logs:
+        # 直近5件程度のフィードバックをプロンプトに注入
+        logs = "\n".join(req.feedback_logs[:5])
+        feedback_text = f"""
+        [ユーザーの好み情報]
+        過去にユーザーはあなたのコメントに対して以下のフィードバックをしました。これに合わせて口調や審査基準を微調整してください:
+        {logs}
+        """
+
+    # 4. Geminiによる評価
     radar_desc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）"
 
     prompt = f"""
     {personality_prompt}
+    {feedback_text}
+
     以下のお題と回答を審査してください。
 
     [お題]: {req.topic}
