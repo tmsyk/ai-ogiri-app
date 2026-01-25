@@ -14,13 +14,13 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.73 (Fixed)";
+const APP_VERSION = "Ver 0.74 (Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
 
 const UPDATE_LOGS = [
+  { version: "Ver 0.74", date: "2026/01/27", content: ["initGame, startRound関数を復元し、ゲーム開始エラーを修正"] },
   { version: "Ver 0.73", date: "2026/01/27", content: ["消失していたinitGame関数等を復元し、起動エラーを修正"] },
   { version: "Ver 0.72", date: "2026/01/27", content: ["使用AIモデル（Watashiha GPT-6b等）のクレジット表記を追加"] },
-  { version: "Ver 0.71", date: "2026/01/27", content: ["Pythonサーバーとの通信形式不一致(422エラー)を修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -580,7 +580,38 @@ export default function AiOgiriApp() {
   const audioCtx = useRef(null);
 
   // --- Functions ---
-  // initGame をコンポーネント定義の上部に配置
+  
+  // Game Logic Functions (Correctly Placed)
+  const generateTopic = async (auto = false) => {
+      if (isGeneratingTopic) return;
+      setIsGeneratingTopic(true);
+      let t = "";
+      try {
+          t = await fetchAiTopic();
+          if (!t) throw new Error("No topic generated");
+          if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
+      } catch (e) { t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; }
+
+      if (auto) {
+          setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
+          if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
+      } else { setManualTopicInput(t); }
+      setIsGeneratingTopic(false);
+  };
+
+  const startRound = (turn) => {
+      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
+      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
+      setIsAdvancingRound(false);
+      setTurnPlayerIndex(turn); 
+      
+      if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') {
+          generateTopic(true);
+      } else {
+          setGamePhase('master_topic');
+      }
+  };
+
   const initGame = async () => {
       playSound('decision'); 
       setAppMode('game'); 
@@ -652,7 +683,6 @@ export default function AiOgiriApp() {
       }
   };
 
-  // ... (Other Utility Functions) ...
   const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
   
   const getUniqueCards = (cards, usedSet) => {
@@ -695,6 +725,222 @@ export default function AiOgiriApp() {
     const trimmed = comment.toString().trim();
     const split = trimmed.split(/[。！？!?]/);
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
+  };
+
+  const checkContentSafety = async (text) => { 
+      if (!isAiActive) return false; 
+      try { 
+          const res = await callGeminiFallback(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); 
+          return res?.isInappropriate || false; 
+      } catch (e) { return false; } 
+  };
+
+  const formatAiComment = (comment) => {
+    if (!comment) return "";
+    return compactComment(comment);
+  };
+
+  const handleBackToTitle = () => {
+    if (window.confirm('タイトル画面に戻りますか？')) {
+      playSound('tap'); setIsTimerRunning(false); setAppMode('title');
+    }
+  };
+
+  const handleLogin = async () => {
+    const provider = new GoogleAuthProvider();
+    try {
+      await signInWithPopup(auth, provider);
+      playSound('decision');
+    } catch (error) {
+      console.error("Login failed", error);
+      alert("ログインに失敗しました。");
+    }
+  };
+
+  const handleLogout = async () => {
+    if(window.confirm('ログアウトしますか？')) {
+        try {
+            await signOut(auth);
+            playSound('tap');
+        } catch (error) {
+            console.error("Logout failed", error);
+        }
+    }
+  };
+
+  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
+  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
+  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
+
+  const updateUserStats = (score, radar) => {
+      setUserStats(prev => {
+          const newCount = (prev.playCount || 0) + 1;
+          const newMax = Math.max(prev.maxScore || 0, score);
+          const prevRadar = prev.totalRadar || prev.averageRadar || { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 };
+          const r = radar || { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 };
+          const newRadar = {
+              novelty: (prevRadar.novelty || 0) + (r.novelty || 0),
+              clarity: (prevRadar.clarity || 0) + (r.clarity || 0),
+              relevance: (prevRadar.relevance || 0) + (r.relevance || 0),
+              intelligence: (prevRadar.intelligence || 0) + (r.intelligence || 0),
+              empathy: (prevRadar.empathy || 0) + (r.empathy || 0),
+          };
+          const newData = { playCount: newCount, maxScore: newMax, totalRadar: newRadar };
+          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData));
+          if (currentUser && !currentUser.isAnonymous) { const ref = getUserDocRef(currentUser.uid, 'stats'); if (ref) setDoc(ref, newData).catch(console.error); }
+          return newData;
+      });
+  };
+
+  const saveToHallOfFame = async (entry) => {
+    const newHall = [...hallOfFame, entry].sort((a, b) => b.score - a.score).slice(0, 3);
+    setHallOfFame(newHall);
+    localStorage.setItem('aiOgiriHallOfFame', JSON.stringify(newHall));
+    
+    if (currentUser && !currentUser.isAnonymous) {
+        const ref = getUserDocRef(currentUser.uid, 'hall_of_fame');
+        if (ref) await setDoc(ref, { entries: newHall }).catch(console.error);
+    }
+  };
+  
+  const checkAndSaveGlobalRank = async (entry) => {
+      if (!db) return;
+      const rankRef = getDocRef('shared_db', 'global_ranking');
+      try {
+          await runTransaction(db, async (transaction) => {
+              const sfDoc = await transaction.get(rankRef);
+              let ranks = [];
+              if (sfDoc.exists()) {
+                  ranks = sfDoc.data().score_attack || [];
+              }
+              ranks.push(entry);
+              ranks.sort((a, b) => b.score - a.score);
+              const top10 = ranks.slice(0, 10);
+              
+              if (JSON.stringify(ranks) !== JSON.stringify(top10) || ranks.length <= 10) {
+                  transaction.set(rankRef, { score_attack: top10 }, { merge: true });
+              }
+          });
+      } catch (e) { console.error("Global ranking update failed: ", e); }
+  };
+
+  const saveGeneratedCards = async (newCards) => {
+    if (!newCards || newCards.length === 0) return;
+    const poolData = newCards.map(c => c.text);
+    const updatedPool = [...(learned.cardPool || []), ...poolData].slice(-100); 
+    const uniquePool = Array.from(new Set(updatedPool));
+    const newLocalData = { ...learned, cardPool: uniquePool };
+    setLearned(newLocalData);
+    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
+  };
+  const saveLearnedTopic = async (newTopic) => {
+    if (newTopic.includes('{placeholder}')) return;
+    const newLocalData = { ...learned, topics: [...learned.topics, newTopic] };
+    setLearned(newLocalData);
+    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
+  };
+  const saveLearnedAnswer = async (newAnswer) => {
+    const newLocalData = { ...learned, goodAnswers: [...learned.goodAnswers, newAnswer] };
+    setLearned(newLocalData);
+    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
+  };
+  const saveAiCommentFeedback = async (comment, isGood) => {
+    if (!comment) return;
+    const feedbackEntry = { comment, isGood, date: new Date().toISOString() };
+    const localFeedback = JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]');
+    const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 50);
+    localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback));
+  };
+  const resetLearnedData = () => {
+    if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
+      localStorage.removeItem('aiOgiriLearnedData');
+      setLearned({ topics: [], answers: [], pool: [] });
+      setTopicsList([...FALLBACK_TOPICS]);
+      playSound('timeup');
+      alert("リセットしました。");
+    }
+  };
+  const updateRanking = async (modeName, value) => {
+    setRankings(prev => {
+      const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry];
+      if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); 
+      const top3 = newList.slice(0, 3); const newRankings = { ...prev, [modeName]: top3 };
+      localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings)); return newRankings;
+    });
+  };
+  
+  const getFinalGameRadar = () => {
+      if (gameRadars.length === 0) return { novelty: 3, clarity: 3, relevance: 3, intelligence: 3, empathy: 3 };
+      const sum = gameRadars.reduce((acc, curr) => ({
+          novelty: acc.novelty + (curr.novelty || 0),
+          clarity: acc.clarity + (curr.clarity || 0),
+          relevance: acc.relevance + (curr.relevance || 0),
+          intelligence: acc.intelligence + (curr.intelligence || 0),
+          empathy: acc.empathy + (curr.empathy || 0),
+       }), { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 });
+      
+      const count = gameRadars.length;
+      return {
+          novelty: sum.novelty / count,
+          clarity: sum.clarity / count,
+          relevance: sum.relevance / count,
+          intelligence: sum.intelligence / count,
+          empathy: sum.empathy / count,
+      };
+  };
+
+  const collectCards = async (count) => {
+    const collected = [];
+    let remaining = count;
+    const usedSet = activeCardsRef.current;
+
+    if (isAiActive && remaining > 0) {
+      const aiCards = await fetchAiCards(Math.max(remaining, HAND_SIZE), usedSet);
+      if (aiCards.length > 0) {
+        registerActiveCards(aiCards);
+        collected.push(...aiCards);
+        remaining -= aiCards.length;
+      }
+    }
+    if (remaining > 0 && learned.cardPool?.length > 0) {
+      const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t, rarity: 'normal' })), usedSet).slice(0, remaining);
+      if (poolCards.length > 0) {
+        registerActiveCards(poolCards);
+        collected.push(...poolCards);
+        remaining -= poolCards.length;
+      }
+    }
+    if (remaining > 0) {
+      const fallbackCards = getUniqueCards(FALLBACK_ANSWERS, usedSet).slice(0, remaining);
+      if (fallbackCards.length > 0) {
+        registerActiveCards(fallbackCards);
+        collected.push(...fallbackCards);
+      }
+    }
+    if (remaining > 0) {
+      const resetCards = getUniqueCards(FALLBACK_ANSWERS, new Set());
+      collected.push(...resetCards.slice(0, remaining));
+    }
+    return collected;
+  };
+
+  const refillHand = async (hand, deck, desiredSize = HAND_SIZE) => {
+    let nextHand = [...hand];
+    let nextDeck = [...deck];
+    while (nextHand.length < desiredSize) {
+      if (nextDeck.length === 0) {
+        const refill = await collectCards(Math.max(desiredSize - nextHand.length, 5));
+        if (refill.length === 0) break; 
+        nextDeck = [...nextDeck, ...refill];
+      }
+      const drawCard = nextDeck.shift();
+      if (!drawCard) break;
+      const drawText = typeof drawCard === 'string' ? drawCard : drawCard.text;
+      if (!nextHand.some(c => (typeof c === 'string' ? c : c.text) === drawText)) {
+          nextHand.push(drawCard);
+      }
+    }
+    return { hand: nextHand, deck: nextDeck };
   };
 
   // --- API Calls ---
@@ -885,6 +1131,7 @@ export default function AiOgiriApp() {
               ranks.push(entry);
               ranks.sort((a, b) => b.score - a.score);
               const top10 = ranks.slice(0, 10);
+              
               if (JSON.stringify(ranks) !== JSON.stringify(top10) || ranks.length <= 10) {
                   transaction.set(rankRef, { score_attack: top10 }, { merge: true });
               }
@@ -946,6 +1193,7 @@ export default function AiOgiriApp() {
           intelligence: acc.intelligence + (curr.intelligence || 0),
           empathy: acc.empathy + (curr.empathy || 0),
        }), { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 });
+      
       const count = gameRadars.length;
       return {
           novelty: sum.novelty / count,
@@ -956,50 +1204,46 @@ export default function AiOgiriApp() {
       };
   };
 
-  const startRound = (turn) => {
-      setSubmissions([]); setSelectedSubmission(null); setAiComment(''); setManualTopicInput(''); setManualAnswerInput('');
-      setTopicFeedback(null); setAiFeedback(null); setHasTopicRerolled(false); setHasHandRerolled(false); setTopicCreateRerollCount(0);
-      setIsAdvancingRound(false);
-      setTurnPlayerIndex(turn); 
-      if (gameConfig.mode === 'single' && gameConfig.singleMode !== 'freestyle') { generateTopic(true); } else { setGamePhase('master_topic'); }
-  };
-
-  const generateTopic = async (auto = false) => {
-      if (isGeneratingTopic) return;
-      setIsGeneratingTopic(true);
-      let t = "";
-      try {
-          t = await fetchAiTopic();
-          if (!t) throw new Error("No topic generated");
-          if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
-      } catch (e) { t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; }
-      if (auto) {
-          setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
-          if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-      } else { setManualTopicInput(t); }
-      setIsGeneratingTopic(false);
-  };
-
-  const confirmTopicAI = async () => {
-    playSound('decision');
-    if (!manualTopicInput.trim()) return;
-    const isAiOrigin = manualTopicInput === lastAiGeneratedTopic;
-    if (!isAiOrigin) {
-        setIsCheckingTopic(true);
-        if (await checkContentSafety(manualTopicInput)) {
-            playSound('timeup'); alert("⚠️ AI判定：不適切な表現が含まれています。");
-            setIsCheckingTopic(false); return;
+  const nextGameRound = () => {
+      playSound('tap');
+      if (isAdvancingRound) return;
+      setIsAdvancingRound(true);
+      setGamePhase('drawing');
+      setTimeout(() => {
+        if (gameConfig.mode === 'single') {
+            if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
+            if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', currentRound - 1); return setGamePhase('final_result'); }
+            if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setGamePhase('final_result'); }
+        } else {
+            if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
         }
-        setIsCheckingTopic(false);
-    }
-    let topic = manualTopicInput;
-    if (!topicsList.includes(topic)) { setTopicsList(prev => [...prev, topic]); saveLearnedTopic(topic); }
-    setCurrentTopic(topic);
-    if (gameConfig.mode === 'single') {
-        setGamePhase('answer_input');
-        if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-    } else prepareNextSubmitter(masterIndex, masterIndex, players);
+        setCurrentRound(r => r + 1);
+        const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
+        setMasterIndex(nextMaster);
+        startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
+      }, 500);
   };
+
+  const handleMultiSubmit = (text) => {
+      setSubmissions(prev => [...prev, { playerId: players[turnPlayerIndex].id, answerText: text }]);
+      setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => (typeof c === 'string' ? c : c.text) !== text) } : p));
+      setManualAnswerInput('');
+      const nextTurn = (turnPlayerIndex + 1) % players.length;
+      if (nextTurn === masterIndex) { 
+          let dummy = cardDeck[0]?.text || "ダミー";
+          setSubmissions(prev => shuffleArray([...prev, { playerId: 'dummy', answerText: dummy, isDummy: true }]));
+          setGamePhase('judging');
+      } else { setTurnPlayerIndex(nextTurn); setGamePhase('turn_change'); }
+  };
+
+  const handleJudge = (sub) => { playSound('decision'); setSelectedSubmission(sub); setPlayers(prev => prev.map(p => { if (sub.isDummy && p.id === players[masterIndex].id) return { ...p, score: p.score - 1 }; if (!sub.isDummy && p.id === sub.playerId) return { ...p, score: p.score + 1 }; return p; })); playSound('result'); setGamePhase('result'); };
+  const handleTopicReroll = async () => { playSound('tap'); if (hasTopicRerolled || isGeneratingTopic) return; setIsGeneratingTopic(true); let topic = ""; try { const res = await fetchAiTopic(); topic = res || FALLBACK_TOPICS[0]; } catch(e) { topic = FALLBACK_TOPICS[0]; } setCurrentTopic(topic); setHasTopicRerolled(true); setIsGeneratingTopic(false); };
+  const handleSingleSubmitManual = async (text) => { submitAnswer(text, true); };
+  const handleTopicFeedback = (isGood) => { playSound('tap'); setTopicFeedback(isGood ? 'good' : 'bad'); if (isGood && currentTopic) saveLearnedTopic(currentTopic); };
+  const handleAiFeedback = (isGood) => { playSound('tap'); setAiFeedback(isGood ? 'good' : 'bad'); if (isGood && selectedSubmission?.answerText) saveLearnedAnswer(selectedSubmission.answerText); saveAiCommentFeedback(aiComment, isGood); };
+  const confirmTopic = () => { playSound('decision'); setCurrentTopic(manualTopicInput); if (gameConfig.mode === 'single') { setGamePhase('answer_input'); setTimeLeft(timeLimit); if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true); } else { setGamePhase('turn_change'); setTurnPlayerIndex((masterIndex + 1) % players.length); } };
+  const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
+  const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
 
   const rerollHand = async () => {
       playSound('card'); if(hasHandRerolled) return; 
@@ -1082,47 +1326,6 @@ export default function AiOgiriApp() {
       setResult({ answer: text, score, comment, radar, zabuton: newZabuton, distance, reasoning });
       setIsJudging(false); playSound('result'); setGamePhase('result');
   };
-
-  const nextGameRound = () => {
-      playSound('tap');
-      if (isAdvancingRound) return;
-      setIsAdvancingRound(true);
-      setGamePhase('drawing');
-      setTimeout(() => {
-        if (gameConfig.mode === 'single') {
-            if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
-            if (gameConfig.singleMode === 'survival' && isSurvivalGameOver) { updateRanking('survival', currentRound - 1); return setGamePhase('final_result'); }
-            if (gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) { updateRanking('time_attack', answerCount); return setGamePhase('final_result'); }
-        } else {
-            if (players.some(p => p.score >= WIN_SCORE_MULTI)) return setGamePhase('final_result');
-        }
-        setCurrentRound(r => r + 1);
-        const nextMaster = gameConfig.mode === 'multi' ? (masterIndex + 1) % players.length : 0;
-        setMasterIndex(nextMaster);
-        startRound(gameConfig.mode === 'single' ? 0 : nextMaster);
-      }, 500);
-  };
-
-  const handleMultiSubmit = (text) => {
-      setSubmissions(prev => [...prev, { playerId: players[turnPlayerIndex].id, answerText: text }]);
-      setPlayers(prev => prev.map(p => p.id === players[turnPlayerIndex].id ? { ...p, hand: p.hand.filter(c => (typeof c === 'string' ? c : c.text) !== text) } : p));
-      setManualAnswerInput('');
-      const nextTurn = (turnPlayerIndex + 1) % players.length;
-      if (nextTurn === masterIndex) { 
-          let dummy = cardDeck[0]?.text || "ダミー";
-          setSubmissions(prev => shuffleArray([...prev, { playerId: 'dummy', answerText: dummy, isDummy: true }]));
-          setGamePhase('judging');
-      } else { setTurnPlayerIndex(nextTurn); setGamePhase('turn_change'); }
-  };
-
-  const handleJudge = (sub) => { playSound('decision'); setSelectedSubmission(sub); setPlayers(prev => prev.map(p => { if (sub.isDummy && p.id === players[masterIndex].id) return { ...p, score: p.score - 1 }; if (!sub.isDummy && p.id === sub.playerId) return { ...p, score: p.score + 1 }; return p; })); playSound('result'); setGamePhase('result'); };
-  const handleTopicReroll = async () => { playSound('tap'); if (hasTopicRerolled || isGeneratingTopic) return; setIsGeneratingTopic(true); let topic = ""; try { const res = await fetchAiTopic(); topic = res || FALLBACK_TOPICS[0]; } catch(e) { topic = FALLBACK_TOPICS[0]; } setCurrentTopic(topic); setHasTopicRerolled(true); setIsGeneratingTopic(false); };
-  const handleSingleSubmitManual = async (text) => { submitAnswer(text, true); };
-  const handleTopicFeedback = (isGood) => { playSound('tap'); setTopicFeedback(isGood ? 'good' : 'bad'); if (isGood && currentTopic) saveLearnedTopic(currentTopic); };
-  const handleAiFeedback = (isGood) => { playSound('tap'); setAiFeedback(isGood ? 'good' : 'bad'); if (isGood && selectedSubmission?.answerText) saveLearnedAnswer(selectedSubmission.answerText); saveAiCommentFeedback(aiComment, isGood); };
-  const confirmTopic = () => { playSound('decision'); setCurrentTopic(manualTopicInput); if (gameConfig.mode === 'single') { setGamePhase('answer_input'); setTimeLeft(timeLimit); if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true); } else { setGamePhase('turn_change'); setTurnPlayerIndex((masterIndex + 1) % players.length); } };
-  const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
-  const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20" style={{backgroundImage: 'url("/background.png")', backgroundSize: 'cover', backgroundAttachment: 'fixed'}}>
