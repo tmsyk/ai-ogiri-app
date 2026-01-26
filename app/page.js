@@ -14,12 +14,12 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.81 (4D Model)";
+const APP_VERSION = "Ver 0.85 (Logic Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.81", date: "2026/01/27", content: ["面白さの4次元評価モデル（言語・認知・情動・視点）を実装", "言葉の硬さ判定ロジックを追加"] },
-  { version: "Ver 0.80", date: "2026/01/27", content: ["レアカードに得点ボーナス(+5点)を追加", "通信タイムアウト延長"] },
+  { version: "Ver 0.85", date: "2026/01/27", content: ["名詞アンカー理論に基づく厳密な採点ロジックを実装", "足切り機能を強化"] },
+  { version: "Ver 0.80", date: "2026/01/27", content: ["レアカード得点ボーナス", "通信タイムアウト延長"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -45,7 +45,7 @@ const JUDGES = {
   chuuni: { name: "厨二病", icon: Skull, desc: "闇の炎に抱かれたコメントをします。" },
 };
 
-// ... (FALLBACK_TOPICS, FALLBACK_ANSWERS, FALLBACK_COMMENTS は省略せずそのまま使用)
+// ... (FALLBACK系定数は省略せず記述)
 const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
 const FALLBACK_ANSWERS = [{text:"プリン",rarity:"normal"},{text:"ポチ",rarity:"normal"},{text:"確定申告",rarity:"normal"},{text:"弁当",rarity:"normal"},{text:"ダイナマイト",rarity:"rare"},{text:"肖像画",rarity:"normal"},{text:"伝説の剣",rarity:"rare"},{text:"消しゴム",rarity:"normal"},{text:"わさび",rarity:"normal"},{text:"自分探し",rarity:"normal"}];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
@@ -60,6 +60,7 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
+// --- Firebase初期化 ---
 let app, auth, db;
 try {
   const conf = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : firebaseConfig;
@@ -97,22 +98,23 @@ const formatTime = (ms) => {
 // 4次元タイプ診断ロジック
 const analyzeType = (radar) => {
     if (!radar) return "判定不能";
-    // 新しい4軸に対応
-    const linguistic = radar.linguistic || 0; // 言語的（硬さ）
-    const cognitive = radar.cognitive || 0;   // 認知的（意味）
-    const emotional = radar.emotional || 0;   // 情動的（聖俗）
-    const focus = radar.focus || 0;           // 視点（解像度）
+    const novelty = radar.novelty || 0;
+    const clarity = radar.clarity || 0;
+    const relevance = radar.relevance || 0;
+    const intelligence = radar.intelligence || 0;
+    const empathy = radar.empathy || 0;
 
-    const total = linguistic + cognitive + emotional + focus;
-    const maxVal = Math.max(linguistic, cognitive, emotional, focus);
+    const total = novelty + clarity + relevance + intelligence + empathy;
+    const maxVal = Math.max(novelty, clarity, relevance, intelligence, empathy);
 
-    if (total >= 18) return "お笑い完全生命体"; // 4項目*5=20満点に近い
-    if (total <= 6) return "伸びしろしかない新人";
+    if (total >= 22) return "お笑い完全生命体";
+    if (total <= 8) return "伸びしろしかない新人";
 
-    if (maxVal === linguistic) return "言葉選びの魔術師";
-    if (maxVal === cognitive) return "発想のトリックスター";
-    if (maxVal === emotional) return "感情の揺さぶり屋";
-    if (maxVal === focus) return "視点の狙撃手";
+    if (maxVal === novelty) return "孤高のシュール職人";
+    if (maxVal === clarity) return "伝わりやすさの鬼";
+    if (maxVal === relevance) return "文脈を操る魔術師";
+    if (maxVal === intelligence) return "インテリジェンスの覇者";
+    if (maxVal === empathy) return "共感のカリスマ";
     
     return "バランスの取れたオールラウンダー";
 };
@@ -178,21 +180,18 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
   );
 };
 
-// 4次元レーダーチャート
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
-  // 4軸に変更
-  const labels = ["言語的(硬)", "認知的(遠)", "情動的(聖)", "視点(微)"]; 
-  const keys = ["linguistic", "cognitive", "emotional", "focus"];
+  const labels = ["新規性", "明瞭性", "関連性", "知性", "共感性"]; 
+  const keys = ["novelty", "clarity", "relevance", "intelligence", "empathy"];
   
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
-    // 4角形なので角度計算を修正 (2 * PI * i / 4)
     return { 
-      x: c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2), 
-      y: c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2) 
+      x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
+      y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
     };
   };
   
@@ -205,20 +204,20 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
              const radius = (l / 5) * r * 0.90;
-             return (c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2));
+             return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {keys.map((_, i) => { 
            const radius = r * 0.90;
-           const x = c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2);
-           const y = c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2);
+           const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
+           const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         {keys.map((_, i) => { 
              const radius = r * 0.90 * 1.35; 
-             const x = c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2);
-             const y = c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2);
+             const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
+             const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
         })}
       </svg>
@@ -226,8 +225,8 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   );
 };
 
-// 意味的距離ゲージ（認知的距離として表示）
-const SemanticDistanceGauge = ({ distance, hardness }) => {
+// 意味的距離ゲージ（4次元統合版）
+const SemanticDistanceGauge = ({ distance, hardness, wordTexture }) => {
   let label = "";
   let colorClass = "";
   let position = distance * 100;
@@ -243,16 +242,16 @@ const SemanticDistanceGauge = ({ distance, hardness }) => {
       colorClass = "bg-green-500 animate-pulse";
   }
   
-  // 硬さゲージも表示
-  let hardLabel = hardness > 0.7 ? "カチコチ(硬)" : hardness < 0.3 ? "フニャフニャ(軟)" : "ノーマル";
+  // テクスチャ表示
+  let textureLabel = wordTexture ? `判定: ${wordTexture}` : (hardness > 0.7 ? "カチコチ(硬)" : hardness < 0.3 ? "フニャフニャ(軟)" : "ノーマル");
 
   return (
-    <div className="w-full max-w-xs mx-auto mt-2 space-y-3">
+    <div className="w-full max-w-xs mx-auto mt-2 space-y-2">
       <div>
           <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-            <span>遠 (Leap)</span>
-            <span className="font-bold text-green-600">認知(Sweet Spot)</span>
-            <span>近 (Anchor)</span>
+            <span>Far</span>
+            <span className="font-bold text-green-600">Sweet Spot</span>
+            <span>Close</span>
           </div>
           <div className="h-3 bg-slate-200 rounded-full relative overflow-hidden">
              <div className="absolute top-0 bottom-0 bg-green-200/50" style={{ left: '40%', width: '20%' }}></div>
@@ -260,9 +259,7 @@ const SemanticDistanceGauge = ({ distance, hardness }) => {
           </div>
           <p className={`text-xs font-bold text-center mt-1 ${distance >= 0.4 && distance <= 0.6 ? 'text-green-600' : 'text-slate-500'}`}>{label}</p>
       </div>
-      
-      {/* 言語的硬度 */}
-      <div>
+       <div>
          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
             <span>軟 (Soft)</span>
             <span>硬 (Hard)</span>
@@ -271,13 +268,12 @@ const SemanticDistanceGauge = ({ distance, hardness }) => {
              <div className="absolute top-0 bottom-0 w-full bg-gradient-to-r from-pink-200 to-slate-400 rounded-full opacity-30"></div>
              <div className="absolute top-0 bottom-0 w-2 h-2 rounded-full bg-slate-600 shadow transition-all duration-1000" style={{ left: `${Math.min(Math.max(hardness * 100, 0), 98)}%` }}></div>
          </div>
-         <p className="text-[10px] text-center text-slate-400">{hardLabel}</p>
+         <p className="text-[10px] text-center text-slate-400">{textureLabel}</p>
       </div>
     </div>
   );
 };
 
-// ZabutonStack コンポーネント
 const ZabutonStack = ({ count }) => {
   const stack = Math.min(count, 20); 
   const isGold = count >= 90; 
@@ -350,14 +346,14 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
 const MyDataModal = ({ stats, onClose, userName }) => {
   const getTotalAverage = () => {
     const count = stats.playCount || 1;
-    // 4軸対応
-    const total = stats.totalRadar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0 };
+    const total = stats.totalRadar || stats.averageRadar || { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 };
     if (stats.totalRadar) {
         return {
-          linguistic: (total.linguistic || 0) / count,
-          cognitive: (total.cognitive || 0) / count,
-          emotional: (total.emotional || 0) / count,
-          focus: (total.focus || 0) / count,
+          novelty: (total.novelty || 0) / count,
+          clarity: (total.clarity || 0) / count,
+          relevance: (total.relevance || 0) / count,
+          intelligence: (total.intelligence || 0) / count,
+          empathy: (total.empathy || 0) / count,
         };
     }
     return total;
@@ -1074,6 +1070,10 @@ export default function AiOgiriApp() {
           if (nextDeck.length < 5) { collectCards(10).then(newCards => { setCardDeck(prev => [...prev, ...newCards]); }); }
           if (nextDeck.length > 0) { currentHand.push(nextDeck.shift()); } else { currentHand.push(shuffleArray(FALLBACK_ANSWERS)[0]); }
           setSinglePlayerHand(currentHand); setCardDeck(nextDeck); syncCardsWrapper([currentHand], nextDeck);
+          
+          // レアカードボーナスフラグを渡すために一時的にstate保存などの工夫もできるが、
+          // ここではシンプルにスコア計算時に考慮する
+          // (下記スコア計算部分へ)
       }
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
@@ -1096,7 +1096,7 @@ export default function AiOgiriApp() {
                 }
             } else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
-      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2}; }
+      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2}; distance = 0.5; }
       
       // レアカードボーナス加算
       if (!isManual) {
@@ -1316,7 +1316,7 @@ export default function AiOgiriApp() {
                             <p className="text-sm text-slate-400 font-bold mb-2">回答</p>
                             <p className="text-3xl font-black text-indigo-600 mb-4">{result?.answer}</p>
                             
-                            {result?.distance && <div className="mb-6 px-4"><SemanticDistanceGauge distance={result.distance} /></div>}
+                            {result?.distance && <div className="mb-6 px-4"><SemanticDistanceGauge distance={result.distance} hardness={result.hardness || 0.5} wordTexture={result.word_texture} /></div>}
                             {gameConfig.mode === 'single' && result?.zabuton > 0 && <div className="mb-4"><ZabutonStack count={result.zabuton} /></div>}
 
                             {gameConfig.mode === 'single' ? (
@@ -1329,6 +1329,8 @@ export default function AiOgiriApp() {
                                   </div>
                                   <p className="text-lg font-bold text-slate-800 mb-2">「{aiComment}」</p>
                                   {result?.reasoning && <div className="mt-3 pt-3 border-t border-slate-200 text-xs text-slate-500"><p className="font-bold mb-1">💡 評価の理由:</p>{result.reasoning}</div>}
+                                  {result?.ai_example && <div className="mt-3 pt-3 border-t border-slate-200 text-xs text-slate-500"><p className="font-bold mb-1">🤖 AIの模範解答:</p>「{result.ai_example}」</div>}
+
                                   <div className="mt-4 flex justify-end gap-2 text-xs text-slate-500">
                                     <span>評価:</span>
                                     {aiFeedback === null ? (
