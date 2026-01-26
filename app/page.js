@@ -14,12 +14,12 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.85 (Logic Fix)";
+const APP_VERSION = "Ver 0.86 (Score Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
+  { version: "Ver 0.86", date: "2026/01/27", content: ["点数が0点になるバグを修正", "エラー時にお題が固定される問題を修正", "AI模範解答の表示を追加"] },
   { version: "Ver 0.85", date: "2026/01/27", content: ["名詞アンカー理論に基づく厳密な採点ロジックを実装", "足切り機能を強化"] },
-  { version: "Ver 0.80", date: "2026/01/27", content: ["レアカード得点ボーナス", "通信タイムアウト延長"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -45,7 +45,6 @@ const JUDGES = {
   chuuni: { name: "厨二病", icon: Skull, desc: "闇の炎に抱かれたコメントをします。" },
 };
 
-// ... (FALLBACK系定数は省略せず記述)
 const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
 const FALLBACK_ANSWERS = [{text:"プリン",rarity:"normal"},{text:"ポチ",rarity:"normal"},{text:"確定申告",rarity:"normal"},{text:"弁当",rarity:"normal"},{text:"ダイナマイト",rarity:"rare"},{text:"肖像画",rarity:"normal"},{text:"伝説の剣",rarity:"rare"},{text:"消しゴム",rarity:"normal"},{text:"わさび",rarity:"normal"},{text:"自分探し",rarity:"normal"}];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
@@ -832,12 +831,17 @@ export default function AiOgiriApp() {
   const fetchAiTopic = async () => {
     try {
         const res = await callServer('/topic', { reference_topics: learned.topics });
+        
+        // エラーチェック: サーバーがエラーメッセージを返してきた場合
+        if (res.topic && (res.topic.includes("エラー") || res.topic.includes("Error"))) {
+           throw new Error("Server returned error topic");
+        }
         return res.topic;
     } catch (e) {
         console.warn("Topic server failed:", e);
-        const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
-        const ref = shuffleArray(cleanRef).join("\n");
-        return (await callGeminiFallback(`大喜利のお題を1つ作成。条件:問いかけ形式。名詞一言で回答可能。プレースホルダー禁止。JSON出力{"topic":"..."} 参考:\n${ref}`))?.topic || null;
+        // フォールバック: 30個の予備お題からランダムに選択
+        const fallbackTopic = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
+        return fallbackTopic;
     }
   };
   
@@ -877,12 +881,35 @@ export default function AiOgiriApp() {
             personality: judgePersonality,
             feedback_logs: feedbackLogs
         };
-        return await callServer('/judge', payload);
+        const res = await callServer('/judge', payload);
+        
+        // サーバーからのスコアが0点かつエラーメッセージでない場合は信用するが、
+        // 明らかにエラーっぽい場合はフォールバックへ
+        if (res.comment && res.comment.includes("エラー")) {
+            throw new Error("Server returned error judgment");
+        }
+        return res;
+
     } catch (e) {
         console.warn("Judge server failed:", e);
+        // フォールバック: 従来通りGeminiを直接呼ぶ (評価軸は旧来のものになる可能性があるが、止まるよりマシ)
         const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus)を0-5で評価";
         const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
-        return await callGeminiFallback(prompt);
+        const fallbackRes = await callGeminiFallback(prompt);
+        
+        if (fallbackRes) {
+            // フォーマットを合わせる
+            return {
+                score: fallbackRes.score || 50,
+                comment: fallbackRes.comment || "...",
+                reasoning: fallbackRes.reasoning || "（通信エラーのため簡易判定）",
+                radar: fallbackRes.radar || {linguistic:3, cognitive:3, emotional:3, focus:3},
+                distance: 0.5,
+                hardness: 0.5,
+                ai_example: "..."
+            };
+        }
+        return null;
     }
   };
 
@@ -902,8 +929,12 @@ export default function AiOgiriApp() {
       try {
           t = await fetchAiTopic();
           if (!t) throw new Error("No topic generated");
+          // 万が一まだplaceholderが残っていたら除去
           if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
-      } catch (e) { t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; }
+      } catch (e) { 
+          // 最終手段: プリセットから
+          t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; 
+      }
 
       if (auto) {
           setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
@@ -1048,7 +1079,9 @@ export default function AiOgiriApp() {
           setSinglePlayerHand(currentHand); setCardDeck(nextDeck); syncCardsWrapper([currentHand], nextDeck);
           setSingleSelectedCard(aiAnswer + " (by AI)");
           let score = 50, comment = "...", radar = null, distance = 0.5, reasoning = "";
-          try { if (isAiActive) { const res = await fetchAiJudgment(currentTopic, aiAnswer, true); if (res) { const totalRadarScore = (res.radar.novelty||0) + (res.radar.clarity||0) + (res.radar.relevance||0) + (res.radar.intelligence||0) + (res.radar.empathy||0); score = totalRadarScore * 4; comment = res.comment; radar = res.radar; distance = res.distance || 0.5; reasoning = res.reasoning || ""; } else throw new Error("AI response null"); } else { throw new Error("AI inactive"); } } catch(e) { score = 50; comment = "AIもスベることはある..."; radar = {novelty:3,clarity:3,relevance:3,intelligence:3,empathy:3}; }
+          try { if (isAiActive) { const res = await fetchAiJudgment(currentTopic, aiAnswer, true); if (res) { 
+              score = res.score || 50; 
+              comment = res.comment; radar = res.radar; distance = res.distance || 0.5; reasoning = res.reasoning || ""; } else throw new Error("AI response null"); } else { throw new Error("AI inactive"); } } catch(e) { score = 50; comment = "AIもスベることはある..."; radar = {novelty:3,clarity:3,relevance:3,intelligence:3,empathy:3}; }
           setAiComment(formatAiComment(comment)); if (radar) { setGameRadars(prev => [...prev, radar]); } 
           const newZabuton = Math.floor(score / 10); setTotalZabuton(prev => prev + newZabuton);
           if (gameConfig.singleMode === 'survival' && score < SURVIVAL_PASS_SCORE + (currentRound - 1) * 10) { setIsSurvivalGameOver(true); }
@@ -1061,39 +1094,29 @@ export default function AiOgiriApp() {
 
       let currentHand = [...singlePlayerHand];
       if (!isManual && gameConfig.mode === 'single') {
-          // レアリティ判定: rareならボーナス
           const usedCard = singlePlayerHand.find(c => (typeof c === 'string' ? c : c.text) === text);
-          const isRare = usedCard && typeof usedCard !== 'string' && usedCard.rarity === 'rare';
-          
           currentHand = singlePlayerHand.filter(c => (typeof c === 'string' ? c : c.text) !== text);
           let nextDeck = [...cardDeck];
           if (nextDeck.length < 5) { collectCards(10).then(newCards => { setCardDeck(prev => [...prev, ...newCards]); }); }
           if (nextDeck.length > 0) { currentHand.push(nextDeck.shift()); } else { currentHand.push(shuffleArray(FALLBACK_ANSWERS)[0]); }
           setSinglePlayerHand(currentHand); setCardDeck(nextDeck); syncCardsWrapper([currentHand], nextDeck);
-          
-          // レアカードボーナスフラグを渡すために一時的にstate保存などの工夫もできるが、
-          // ここではシンプルにスコア計算時に考慮する
-          // (下記スコア計算部分へ)
       }
       if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
 
-      let score = 50, comment = "...", radar = null, distance = 0.5, reasoning = "";
+      let score = 50, comment = "...", radar = null, distance = 0.5, reasoning = "", hardness = 0.5, ai_example = "", word_texture = "";
       try {
         if (isAiActive) {
             const res = await fetchAiJudgment(currentTopic, text, isManual);
             if (res) {
-                // 4次元モデルの合計計算
-                const r = res.radar || {};
-                const totalRadarScore = (r.linguistic||0) + (r.cognitive||0) + (r.emotional||0) + (r.focus||0);
-                // 20点満点 * 5 = 100点
-                score = totalRadarScore * 5; 
-                comment = res.comment; radar = res.radar; 
-                distance = res.distance || 0.5; reasoning = res.reasoning || "";
-                
-                // ハードネス情報の取得（サーバーから返っていれば）
-                if (res.hardness !== undefined) {
-                    // 表示用に追加処理が必要ならここに記述
-                }
+                // サーバーから返ってきたscoreを優先使用
+                score = res.score !== undefined ? res.score : 50;
+                comment = res.comment; 
+                radar = res.radar; 
+                distance = res.distance || 0.5; 
+                reasoning = res.reasoning || "";
+                hardness = res.hardness || 0.5;
+                ai_example = res.ai_example || "";
+                word_texture = res.word_texture || "";
             } else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
       } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2}; distance = 0.5; }
@@ -1123,7 +1146,7 @@ export default function AiOgiriApp() {
       if (gameConfig.singleMode === 'time_attack') { if (players[0].score + score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now()); }
       
       setPlayers(prev => { const newP = [...prev]; newP[0].score += score; return newP; });
-      setResult({ answer: text, score, comment, radar, zabuton: newZabuton, distance, reasoning });
+      setResult({ answer: text, score, comment, radar, zabuton: newZabuton, distance, reasoning, hardness, ai_example, word_texture });
       setIsJudging(false); playSound('result'); setGamePhase('result');
   };
 
