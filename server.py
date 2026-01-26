@@ -8,15 +8,11 @@ from google.genai import types
 import json
 import numpy as np
 import requests
+import unicodedata
 
 # --- 設定 ---
 API_KEY = os.environ.get("GEMINI_API_KEY")
 HF_API_KEY = os.environ.get("HUGGINGFACE_API_KEY")
-
-if not API_KEY:
-    # ローカルテスト用（Gitには上げないでください）
-    # API_KEY = "AIzaSy..." 
-    pass
 
 if not API_KEY:
     print("エラー: APIキーが設定されていません。")
@@ -41,6 +37,36 @@ try:
 except Exception as e:
     print(f"Initialization error: {e}")
 
+# --- 計算ロジック: 言語的距離（言葉の硬さ） ---
+def calc_linguistic_hardness(text):
+    """
+    文字列の「硬さ」を判定する。
+    漢字が多いほど硬く(1.0に近い)、ひらがな・カタカナが多いほど軟らかい(0.0に近い)。
+    """
+    if not text: return 0.0
+    
+    # 評価対象とする文字数（記号などを除く）
+    valid_chars = [c for c in text if unicodedata.category(c) != 'Po']
+    if not valid_chars: return 0.0
+    
+    length = len(valid_chars)
+    kanji_count = 0
+    
+    for c in valid_chars:
+        name = unicodedata.name(c, '')
+        # 漢字の判定
+        if 'CJK UNIFIED IDEOGRAPH' in name:
+            kanji_count += 1
+            
+    # 漢字率 (0.0 ~ 1.0)
+    hardness = kanji_count / length
+    
+    # 四字熟語ボーナス（4文字で全て漢字なら硬度MAX）
+    if length == 4 and kanji_count == 4:
+        hardness = 1.0
+        
+    return hardness
+
 # --- Watashihaモデル用関数 ---
 def generate_by_watashiha(prompt):
     if not HF_API_KEY:
@@ -52,15 +78,15 @@ def generate_by_watashiha(prompt):
     payload = {
         "inputs": f"大喜利のお題：{prompt}\n面白い回答：",
         "parameters": {
-            "max_new_tokens": 30,
-            "temperature": 0.85,
+            "max_new_tokens": 20, # 短く
+            "temperature": 0.9,   # ランダム性を高く
             "return_full_text": False,
-            "stop": ["\n", "。"]
+            "stop": ["\n", "。"]  # 一言で止める
         }
     }
     
     try:
-        response = requests.post(API_URL, headers=headers, json=payload)
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=5) # タイムアウト設定
         output = response.json()
         if isinstance(output, list) and len(output) > 0 and "generated_text" in output[0]:
             text = output[0]["generated_text"].strip().replace("回答：", "")
@@ -95,85 +121,94 @@ def calculate_cosine_similarity(vec1, vec2):
     norm_b = np.linalg.norm(vec2)
     return dot_product / (norm_a * norm_b)
 
-def get_distance_multiplier(similarity):
-    # 逆U字型仮説に基づく補正
-    if 0.4 <= similarity <= 0.6: return 1.2 # Sweet Spot
-    elif 0.2 < similarity < 0.8: return 1.0 # Normal
-    else: return 0.8 # Too Close / Too Far
+def calculate_overall_score(radar):
+    """
+    ユーザー提示の総合判定アルゴリズム
+    Overall = (Clarity * Relevance) * Max(Novelty, Intelligence, Empathy)
+    ※ 各項目は0-5点とし、計算のために0.0-1.0に正規化してから計算し、最後に100点満点に戻す
+    """
+    # 0-5点のスコアを取得
+    clarity = radar.get('clarity', 0)
+    relevance = radar.get('relevance', 0)
+    novelty = radar.get('novelty', 0)
+    intelligence = radar.get('intelligence', 0)
+    empathy = radar.get('empathy', 0)
+
+    # 必須項目（足切り係数）: 0.0 ~ 1.0
+    # 5点満点なので /5 する。さらに厳しめにするなら2乗するなど調整可
+    # gate_factor = (clarity / 5.0) * (relevance / 5.0) 
+    # 少し緩和: 両方5なら1.0。片方1なら0.2になる
+    gate_factor = (clarity / 5.0) * (relevance / 5.0)
+
+    # 特化項目（最大火力）: 0 ~ 100点
+    # いずれか一つでも5点なら100点満点のポテンシャル
+    max_power = max(novelty, intelligence, empathy)
+    # 5点満点を100点満点スケールに変換
+    power_score = (max_power / 5.0) * 100
+
+    # 総合点
+    overall = gate_factor * power_score
+    
+    return int(overall)
 
 # --- APIエンドポイント ---
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server (Computational Humor Edition)"}
+    return {"status": "ok", "message": "AI Ogiri Server (Noun Anchor Theory Edition)"}
 
 @app.post("/api/watashiha")
 def generate_joke(req: WatashihaRequest):
+    # 直接呼び出し用エンドポイント
     answer = generate_by_watashiha(req.topic)
-    if answer:
-        return {"answer": answer}
-    else:
-        # フォールバックとしてGeminiを使用
-        try:
-            prompt = f"大喜利のお題「{req.topic}」に対して、人間味のあるボケ回答を1つ出力してください。回答のみ。"
-            res = client.models.generate_content(model=GEN_MODEL_NAME, contents=prompt)
-            return {"answer": res.text.strip()}
-        except:
-            return {"answer": "（思いつかなかった...）"}
+    if answer: return {"answer": answer}
+    else: return {"answer": "（思いつかなかった...）"}
 
 @app.post("/api/topic")
 def generate_topic(req: TopicRequest):
     ref_text = ""
     if req.reference_topics:
         ref_sample = "\n".join(req.reference_topics[:5])
-        ref_text = f"以下はユーザーが高く評価したお題の例です。これらと似たテイストや形式を意識してください:\n{ref_sample}"
-
+        ref_text = f"以下はユーザーが高く評価したお題の例です:\n{ref_sample}"
     prompt = f"""
     大喜利のお題を1つ作成してください。
-    条件: 
-    1. 問いかけ形式（「〜とは？」「〜は？」）。
-    2. 回答は名詞一言でボケられるもの。
-    3. プレースホルダー（穴埋め）は禁止。
+    条件: 問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言でボケられるもの。
     {ref_text}
     JSON出力: {{"topic":"..."}}
     """
-    
     try:
-        response = client.models.generate_content(
-            model=GEN_MODEL_NAME, contents=prompt,
-            config={'response_mime_type': 'application/json'}
-        )
+        response = client.models.generate_content(model=GEN_MODEL_NAME, contents=prompt, config={'response_mime_type': 'application/json'})
         return json.loads(response.text)
-    except Exception as e:
-        return {"topic": "エラーが発生したため、お題が出せません。"}
+    except Exception: return {"topic": "エラーが発生したため、お題が出せません。"}
 
 @app.post("/api/cards")
 def generate_cards(req: CardRequest):
     prompt = f"""
     大喜利の回答カード（単語・短いフレーズ）を{req.count}個作成。
-    条件:
-    1. 世の中に実在する言葉、名詞、慣用句。
-    2. インパクトの強い言葉には "rarity": "rare" を付与。
-    3. 以下の既出リストに含まれる言葉は避ける: {', '.join(req.used_cards[-20:])}
+    条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.既出避け: {', '.join(req.used_cards[-20:])}
     出力JSON: {{"answers": [{{ "text": "...", "rarity": "normal" }}, ... ]}}
     """
     try:
-        response = client.models.generate_content(
-            model=GEN_MODEL_NAME, contents=prompt,
-            config={'response_mime_type': 'application/json'}
-        )
+        response = client.models.generate_content(model=GEN_MODEL_NAME, contents=prompt, config={'response_mime_type': 'application/json'})
         return json.loads(response.text)
-    except Exception as e:
-        return {"answers": []}
+    except Exception: return {"answers": []}
 
 @app.post("/api/judge")
 def judge_answer(req: JudgeRequest):
     similarity = 0.5
     distance_eval = "Unknown"
-    multiplier = 1.0
+    hardness = 0.0
 
-    # 1. API経由でベクトル類似度を計算
+    # 1. Watashihaモデルによる回答例生成（参考）
+    ai_example = generate_by_watashiha(req.topic)
+    if not ai_example: ai_example = "（考え中...）"
+
+    # 2. Python側での計算（言語的距離 & 認知的距離）
     try:
+        # 言語的距離（硬さ）の計算
+        hardness = calc_linguistic_hardness(req.answer)
+        
+        # 認知的距離（ベクトル類似度）の計算
         result_topic = client.models.embed_content(
             model=EMBED_MODEL_NAME, contents=req.topic,
             config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
@@ -182,77 +217,65 @@ def judge_answer(req: JudgeRequest):
             model=EMBED_MODEL_NAME, contents=req.answer,
             config=types.EmbedContentConfig(task_type="SEMANTIC_SIMILARITY")
         )
-        
         similarity = float(calculate_cosine_similarity(
             result_topic.embeddings[0].values,
             result_answer.embeddings[0].values
         ))
-
-        multiplier = get_distance_multiplier(similarity)
-
+        
+        # 類似度(Similarity)から距離(Distance)への変換イメージ
+        # Sim 1.0 (近い) -> Dist 0.0
+        # Sim 0.0 (遠い) -> Dist 1.0
+        # Sweet Spot (Sim 0.4~0.6)
+        
         if 0.4 <= similarity <= 0.6: distance_eval = "Sweet Spot (絶妙)"
-        elif similarity > 0.8: distance_eval = "Too Close (近すぎ)"
-        elif similarity < 0.2: distance_eval = "Too Far (遠すぎ)"
+        elif similarity > 0.8: distance_eval = "Too Close (近すぎ/Anchor)"
+        elif similarity < 0.2: distance_eval = "Too Far (遠すぎ/Leap)"
         else: distance_eval = "Normal"
 
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Calc Error: {e}")
 
-    # 2. 審査員ペルソナ
-    personas = {
-        "logic": "あなたは計算論的ユーモア理論を実装した「論理派AI審査エンジン」です。",
-        "strict": "あなたは激辛審査員です。採点は厳しく（基準より-10点）、辛辣なコメントをします。",
-        "gal": "あなたはギャル審査員です。「ウケる」「それな」などの若者言葉でノリよく採点します。",
-        "chuuni": "あなたは厨二病審査員です。闇の炎や禁断の力に例えて大げさにコメントします。",
-        "standard": "あなたは「ノリの良いお笑い審査員」です。"
-    }
-    personality_prompt = personas.get(req.personality, personas["logic"])
-
+    # 3. 審査員プロンプト構築
     feedback_text = ""
     if req.feedback_logs:
         logs = "\n".join(req.feedback_logs[:5])
-        feedback_text = f"[ユーザーの好み情報]\n{logs}"
+        feedback_text = f"[ユーザーの好み]\n{logs}"
 
-    # 3. 計算論的ユーモア理論に基づく評価プロンプト
-    theory_instructions = """
-    【重要：4つの距離によるユーモア解析】
-    以下の4つの観点から、お題と回答の間の「距離」と「不一致の解決」を分析してください。
-
-    1. 意味的距離 (Semantic Distance):
-       - ベクトル類似度がSweet Spot(0.4-0.6)にあるか？
-       - スクリプト対立（Script Opposition）が成立しているか？
-    2. 発音的距離 (Phonetic Distance):
-       - 語呂合わせ、ダジャレ、リズム感、音象徴による面白さはあるか？
-    3. 視覚的距離 (Visual Distance):
-       - 文字の見た目、表記の逸脱、イメージのギャップはあるか？
-    4. 感情的距離 (Emotional Distance):
-       - 緊張の緩和（Relief）や、感情の落差（ネガティブ→ポジティブ等）はあるか？
-    """
-
-    radar_desc = "radarは5項目(novelty:新規性, clarity:明瞭性, relevance:関連性, intelligence:知性, empathy:共感性)を0-5で厳正に評価（3が標準）"
+    # ヒント情報の構築
+    hints = {
+        "linguistic_hardness": f"{hardness:.2f} (1.0に近いほど硬い/漢字多)",
+        "semantic_distance_val": f"{similarity:.4f} (1.0に近いほど意味が近い)",
+        "distance_judgment": distance_eval
+    }
 
     prompt = f"""
-    {personality_prompt}
+    あなたは『名詞限定大喜利』の辛口審査員です。
+    入力された【距離データ】と【名詞回答】に基づき、5つの評価基準(0-5点)で厳密に採点してください。
     {feedback_text}
-
-    以下のお題と回答を審査してください。
 
     [お題]: {req.topic}
     [回答]: {req.answer}
-    [分析データ]: 意味的類似度 {similarity:.4f} ({distance_eval})
+    [距離データ(Hints)]: {json.dumps(hints, ensure_ascii=False)}
 
-    # 評価ルール
-    {theory_instructions}
+    # 評価ロジック
+    1. 足切り (Gatekeeper):
+       - 「clarity(明瞭性)」や「relevance(関連性)」が低い場合、他が高くても総合点は低くなります。
+       - 特に「relevance」は、ベクトル類似度が低くても(遠くても)、文脈や音で隠れたロジックが成立していれば高得点を与えてください。
+    
+    2. 加点ルート (Winning Styles):
+       - A. シュール型: 距離が遠い(similarity低)が、novelty(新規性)が高い。
+       - B. インテリ型: 言語的距離(hardness)のギャップがあり、intelligence(知性)が高い。
+       - C. 共感型: 距離が近い(similarity高)が、empathy(共感性)が高い。
 
-    1. 上記の4つの距離の観点から総合的に面白さを判断してください。
-    2. 類似度データは重要な指標ですが、ダジャレ（発音的距離）やシュールさ（視覚的距離）などでカバーできている場合は、類似度が範囲外でも高評価としてください。
-    3. {radar_desc}
-    4. 「reasoning」には、どの「距離」が面白さに貢献したかを明記して解説してください。
-
-    出力JSON: {{
-        "comment": "15文字程度のツッコミ",
-        "reasoning": "理論に基づく分析解説",
-        "radar": {{"novelty":3, "clarity":3, "relevance":3, "intelligence":3, "empathy":3}}
+    # 出力フォーマット
+    JSONで出力してください。
+    {{
+        "scores": {{
+            "novelty": 0-5, "clarity": 0-5, "relevance": 0-5, 
+            "intelligence": 0-5, "empathy": 0-5
+        }},
+        "comment": "距離と質に触れた辛口コメント",
+        "reasoning": "なぜこの点数なのか、不突合と解決のロジックから1文で解説"
     }}
     """
 
@@ -263,29 +286,40 @@ def judge_answer(req: JudgeRequest):
         )
         result = json.loads(response.text)
         
-        # 定量的補正
-        radar = result.get("radar", {})
-        for k in radar:
-            # 類似度による補正をかけるが、AIが「他の距離でカバーできている」と判断して高得点をつけている場合は尊重する
-            # ここでは極端な補正はせず、AIの判断を主とする
-            new_score = round(radar[k] * multiplier)
-            radar[k] = max(0, min(5, new_score))
+        # 4. 総合点の計算 (Python側で厳密に実施)
+        scores = result.get("scores", {})
+        # キー名の揺らぎ補正（念のため）
+        radar = {
+            "novelty": scores.get("novelty", 0),
+            "clarity": scores.get("clarity", 0),
+            "relevance": scores.get("relevance", 0),
+            "intelligence": scores.get("intelligence", 0),
+            "empathy": scores.get("empathy", 0)
+        }
         
-        result["radar"] = radar
-        result["distance"] = similarity
+        final_score = calculate_overall_score(radar)
         
-        # 解説に補正情報を追記
-        if "Sweet Spot" in distance_eval:
-            result["reasoning"] += " (★意味的距離が絶妙)"
+        # レスポンス構築
+        response_data = {
+            "score": final_score,
+            "comment": result.get("comment", "ノーコメント"),
+            "reasoning": result.get("reasoning", ""),
+            "radar": radar,
+            "distance": similarity,
+            "hardness": hardness,
+            "ai_example": ai_example
+        }
         
-        return result
+        return response_data
+
     except Exception as e:
         print(f"Judge Error: {e}")
         return {
-            "comment": "評価不能や...", 
-            "reasoning": "通信エラー", 
+            "score": 0,
+            "comment": "審査中にエラーが発生しました。",
+            "reasoning": "通信エラー",
             "distance": similarity,
-            "radar": {"novelty":1,"clarity":1,"relevance":1,"intelligence":1,"empathy":1}
+            "radar": {"novelty":0,"clarity":0,"relevance":0,"intelligence":0,"empathy":0}
         }
 
 if __name__ == "__main__":
