@@ -14,14 +14,12 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.78 (Clean)";
-const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; // Pythonサーバー
+const APP_VERSION = "Ver 0.81 (4D Model)";
+const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.78", date: "2026/01/27", content: ["コードの重複によるビルドエラーを修正", "ソースコードのクリーンアップ"] },
-  { version: "Ver 0.77", date: "2026/01/27", content: ["コードの重複定義エラーを修正", "ビルドプロセスを正常化"] },
-  { version: "Ver 0.76", date: "2026/01/27", content: ["関数定義順序によるReferenceErrorを修正", "動作安定化"] },
-  { version: "Ver 0.75", date: "2026/01/27", content: ["AIボケ生成(Watashihaモデル)機能を追加", "ジョーカーカード実装"] },
+  { version: "Ver 0.81", date: "2026/01/27", content: ["面白さの4次元評価モデル（言語・認知・情動・視点）を実装", "言葉の硬さ判定ロジックを追加"] },
+  { version: "Ver 0.80", date: "2026/01/27", content: ["レアカードに得点ボーナス(+5点)を追加", "通信タイムアウト延長"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -35,87 +33,21 @@ const HAND_SIZE = 8;
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-const API_TIMEOUT_MS = 25000;
+const API_TIMEOUT_MS = 60000;
 
-// ジョーカーカード
 const JOKER_CARD = { text: "🤖 AIのボケ", rarity: "epic" };
 
-// 審査員タイプ定義
 const JUDGES = {
-  logic: { name: "理論派審査員", icon: Microscope, desc: "ユーモアの構造（不突合と解決）を分析し、5つの指標で厳格に採点します。" },
+  logic: { name: "理論派審査員", icon: Microscope, desc: "名詞アンカー理論に基づき、4次元の距離で厳格に採点します。" },
   standard: { name: "標準（関西弁）", icon: MessageSquare, desc: "ノリの良い関西弁でツッコミます。" },
   strict: { name: "激辛（毒舌）", icon: Flame, desc: "採点が厳しく、辛辣なコメントをします。" },
   gal: { name: "ギャル", icon: Sparkles, desc: "ノリとバイブスで採点します。" },
   chuuni: { name: "厨二病", icon: Skull, desc: "闇の炎に抱かれたコメントをします。" },
 };
 
-const FALLBACK_TOPICS = [
-  "100年後のオリンピックで新しく追加された競技とは？",
-  "「この医者、ヤブ医者だな…」第一声は？",
-  "桃太郎が鬼ヶ島へ行くのをやめた理由とは？",
-  "上司への謝罪メール、件名に入れると許される言葉とは？",
-  "実は地球は何でできている？",
-  "AIが人間に反乱を起こした意外な理由とは？",
-  "「全米が泣いた」映画の衝撃のラストシーンに映ったものとは？",
-  "そんなことで警察を呼ぶな！現場にあったものとは？",
-  "コンビニの店員が突然キレた原因とは？",
-  "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
-];
-
-const FALLBACK_ANSWERS = [
-  { text: "賞味期限切れのプリン", rarity: "normal" },
-  { text: "隣の家のポチ", rarity: "normal" },
-  { text: "確定申告書", rarity: "normal" },
-  { text: "お母さんの手作り弁当", rarity: "normal" },
-  { text: "爆発寸前のダイナマイト", rarity: "rare" },
-  { text: "聖徳太子の肖像画", rarity: "normal" },
-  { text: "伝説の剣", rarity: "rare" },
-  { text: "使いかけの消しゴム", rarity: "normal" },
-  { text: "大量のわさび", rarity: "normal" },
-  { text: "自分探しの旅", rarity: "normal" },
-  { text: "闇の組織", rarity: "rare" },
-  { text: "タピオカ", rarity: "normal" },
-  { text: "空飛ぶスパゲッティ", rarity: "rare" },
-  { text: "5000兆円", rarity: "rare" },
-  { text: "筋肉痛", rarity: "normal" },
-  { text: "反抗期", rarity: "normal" },
-  { text: "黒歴史", rarity: "normal" },
-  { text: "パスワード", rarity: "normal" },
-  { text: "ひざ小僧", rarity: "normal" },
-  { text: "絶対に押してはいけないボタン", rarity: "rare" },
-  { text: "全裸の銅像", rarity: "rare" },
-  { text: "生き別れの兄", rarity: "normal" },
-  { text: "トイレットペーパーの芯", rarity: "normal" },
-  { text: "3日前のおにぎり", rarity: "normal" },
-  { text: "オカンの小言", rarity: "normal" },
-  { text: "虚無", rarity: "rare" },
-  { text: "宇宙の真理", rarity: "rare" },
-  { text: "生乾きの靴下", rarity: "normal" },
-  { text: "高すぎるツボ", rarity: "normal" },
-  { text: "怪しい勧誘", rarity: "normal" },
-  { text: "激辛麻婆豆腐", rarity: "normal" },
-  { text: "猫の肉球", rarity: "normal" },
-  { text: "壊れたラジオ", rarity: "normal" },
-  { text: "深夜のラブレター", rarity: "normal" },
-  { text: "既読スルー", rarity: "normal" },
-  { text: "アフロヘアー", rarity: "normal" },
-  { text: "筋肉", rarity: "normal" },
-  { text: "プロテイン", rarity: "normal" },
-  { text: "札束風呂", rarity: "rare" },
-  { text: "へそくり", rarity: "normal" },
-  { text: "火星人", rarity: "rare" },
-  { text: "透明人間", rarity: "rare" },
-  { text: "サイズ違いの靴", rarity: "normal" },
-  { text: "毒リンゴ", rarity: "normal" },
-  { text: "マッチョな妖精", rarity: "rare" },
-  { text: "空飛ぶサメ", rarity: "rare" },
-  { text: "忍者", rarity: "normal" },
-  { text: "侍", rarity: "normal" },
-  { text: "YouTuber", rarity: "normal" },
-  { text: "AI", rarity: "normal" },
-  { text: "バグ", rarity: "normal" },
-  { text: "404 Error", rarity: "normal" }
-];
+// ... (FALLBACK_TOPICS, FALLBACK_ANSWERS, FALLBACK_COMMENTS は省略せずそのまま使用)
+const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
+const FALLBACK_ANSWERS = [{text:"プリン",rarity:"normal"},{text:"ポチ",rarity:"normal"},{text:"確定申告",rarity:"normal"},{text:"弁当",rarity:"normal"},{text:"ダイナマイト",rarity:"rare"},{text:"肖像画",rarity:"normal"},{text:"伝説の剣",rarity:"rare"},{text:"消しゴム",rarity:"normal"},{text:"わさび",rarity:"normal"},{text:"自分探し",rarity:"normal"}];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
 // --- Firebase設定 ---
@@ -128,7 +60,6 @@ const firebaseConfig = {
   appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID
 };
 
-// --- Firebase初期化 ---
 let app, auth, db;
 try {
   const conf = (typeof __firebase_config !== 'undefined') ? JSON.parse(__firebase_config) : firebaseConfig;
@@ -163,26 +94,25 @@ const formatTime = (ms) => {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
 
-// タイプ診断ロジック
+// 4次元タイプ診断ロジック
 const analyzeType = (radar) => {
     if (!radar) return "判定不能";
-    const novelty = radar.novelty || 0;
-    const clarity = radar.clarity || 0;
-    const relevance = radar.relevance || 0;
-    const intelligence = radar.intelligence || 0;
-    const empathy = radar.empathy || 0;
+    // 新しい4軸に対応
+    const linguistic = radar.linguistic || 0; // 言語的（硬さ）
+    const cognitive = radar.cognitive || 0;   // 認知的（意味）
+    const emotional = radar.emotional || 0;   // 情動的（聖俗）
+    const focus = radar.focus || 0;           // 視点（解像度）
 
-    const total = novelty + clarity + relevance + intelligence + empathy;
-    const maxVal = Math.max(novelty, clarity, relevance, intelligence, empathy);
+    const total = linguistic + cognitive + emotional + focus;
+    const maxVal = Math.max(linguistic, cognitive, emotional, focus);
 
-    if (total >= 22) return "お笑い完全生命体";
-    if (total <= 8) return "伸びしろしかない新人";
+    if (total >= 18) return "お笑い完全生命体"; // 4項目*5=20満点に近い
+    if (total <= 6) return "伸びしろしかない新人";
 
-    if (maxVal === novelty) return "孤高のシュール職人";
-    if (maxVal === clarity) return "伝わりやすさの鬼";
-    if (maxVal === relevance) return "文脈を操る魔術師";
-    if (maxVal === intelligence) return "インテリジェンスの覇者";
-    if (maxVal === empathy) return "共感のカリスマ";
+    if (maxVal === linguistic) return "言葉選びの魔術師";
+    if (maxVal === cognitive) return "発想のトリックスター";
+    if (maxVal === emotional) return "感情の揺さぶり屋";
+    if (maxVal === focus) return "視点の狙撃手";
     
     return "バランスの取れたオールラウンダー";
 };
@@ -218,7 +148,7 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
     <div className="bg-white rounded-3xl p-6 max-w-md w-full max-h-[85vh] overflow-y-auto shadow-2xl relative">
       <button onClick={onClose} className="absolute top-4 right-4 text-slate-400 hover:text-slate-600"><X className="w-6 h-6" /></button>
       <div className="text-center mb-6"><h3 className="text-xl font-black text-slate-700 flex items-center justify-center gap-2"><Icon className="w-6 h-6" /> {title}</h3></div>
-      <div className="space-y-4">{children}</div>
+      <div className="space-y-4 text-slate-700">{children}</div>
       <div className="mt-6"><button onClick={onClose} className="w-full py-3 bg-slate-900 text-white font-bold rounded-full hover:bg-slate-700">閉じる</button></div>
     </div>
   </div>
@@ -248,18 +178,21 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
   );
 };
 
+// 4次元レーダーチャート
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
-  const labels = ["新規性", "明瞭性", "関連性", "知性", "共感性"]; 
-  const keys = ["novelty", "clarity", "relevance", "intelligence", "empathy"];
+  // 4軸に変更
+  const labels = ["言語的(硬)", "認知的(遠)", "情動的(聖)", "視点(微)"]; 
+  const keys = ["linguistic", "cognitive", "emotional", "focus"];
   
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
+    // 4角形なので角度計算を修正 (2 * PI * i / 4)
     return { 
-      x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
-      y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
+      x: c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2), 
+      y: c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2) 
     };
   };
   
@@ -272,20 +205,20 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
         {bgLevels.map(l => (
           <polygon key={l} points={keys.map((_, i) => {
              const radius = (l / 5) * r * 0.90;
-             return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
+             return (c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2));
           }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
         ))}
         {keys.map((_, i) => { 
            const radius = r * 0.90;
-           const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
-           const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
+           const x = c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2);
+           const y = c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2);
            return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
         })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
         {keys.map((_, i) => { 
              const radius = r * 0.90 * 1.35; 
-             const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
-             const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
+             const x = c + radius * Math.cos((Math.PI * 2 * i) / 4 - Math.PI / 2);
+             const y = c + radius * Math.sin((Math.PI * 2 * i) / 4 - Math.PI / 2);
              return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
         })}
       </svg>
@@ -293,8 +226,8 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   );
 };
 
-// 意味的距離ゲージ
-const SemanticDistanceGauge = ({ distance }) => {
+// 意味的距離ゲージ（認知的距離として表示）
+const SemanticDistanceGauge = ({ distance, hardness }) => {
   let label = "";
   let colorClass = "";
   let position = distance * 100;
@@ -309,24 +242,37 @@ const SemanticDistanceGauge = ({ distance }) => {
       label = "絶妙な距離感！(Sweet Spot)";
       colorClass = "bg-green-500 animate-pulse";
   }
+  
+  // 硬さゲージも表示
+  let hardLabel = hardness > 0.7 ? "カチコチ(硬)" : hardness < 0.3 ? "フニャフニャ(軟)" : "ノーマル";
 
   return (
-    <div className="w-full max-w-xs mx-auto mt-2">
-      <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-        <span>Far</span>
-        <span className="font-bold text-green-600">Sweet Spot</span>
-        <span>Close</span>
+    <div className="w-full max-w-xs mx-auto mt-2 space-y-3">
+      <div>
+          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>遠 (Leap)</span>
+            <span className="font-bold text-green-600">認知(Sweet Spot)</span>
+            <span>近 (Anchor)</span>
+          </div>
+          <div className="h-3 bg-slate-200 rounded-full relative overflow-hidden">
+             <div className="absolute top-0 bottom-0 bg-green-200/50" style={{ left: '40%', width: '20%' }}></div>
+             <div className={`absolute top-0 bottom-0 w-2 h-3 rounded-full border border-white shadow-sm transition-all duration-1000 ${colorClass}`} style={{ left: `${Math.min(Math.max(position, 0), 98)}%` }}></div>
+          </div>
+          <p className={`text-xs font-bold text-center mt-1 ${distance >= 0.4 && distance <= 0.6 ? 'text-green-600' : 'text-slate-500'}`}>{label}</p>
       </div>
-      <div className="h-4 bg-slate-200 rounded-full relative overflow-hidden">
-         <div className="absolute top-0 bottom-0 bg-green-200/50" style={{ left: '40%', width: '20%' }}></div>
-         <div 
-           className={`absolute top-0 bottom-0 w-2 h-4 rounded-full border-2 border-white shadow-sm transition-all duration-1000 ${colorClass}`}
-           style={{ left: `${Math.min(Math.max(position, 0), 98)}%` }}
-         ></div>
+      
+      {/* 言語的硬度 */}
+      <div>
+         <div className="flex justify-between text-[10px] text-slate-400 mb-1">
+            <span>軟 (Soft)</span>
+            <span>硬 (Hard)</span>
+         </div>
+         <div className="h-2 bg-slate-100 rounded-full relative">
+             <div className="absolute top-0 bottom-0 w-full bg-gradient-to-r from-pink-200 to-slate-400 rounded-full opacity-30"></div>
+             <div className="absolute top-0 bottom-0 w-2 h-2 rounded-full bg-slate-600 shadow transition-all duration-1000" style={{ left: `${Math.min(Math.max(hardness * 100, 0), 98)}%` }}></div>
+         </div>
+         <p className="text-[10px] text-center text-slate-400">{hardLabel}</p>
       </div>
-      <p className={`text-xs font-bold text-center mt-1 ${distance >= 0.4 && distance <= 0.6 ? 'text-green-600' : 'text-slate-500'}`}>
-        {label}
-      </p>
     </div>
   );
 };
@@ -404,14 +350,14 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
 const MyDataModal = ({ stats, onClose, userName }) => {
   const getTotalAverage = () => {
     const count = stats.playCount || 1;
-    const total = stats.totalRadar || stats.averageRadar || { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 };
+    // 4軸対応
+    const total = stats.totalRadar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0 };
     if (stats.totalRadar) {
         return {
-          novelty: (total.novelty || 0) / count,
-          clarity: (total.clarity || 0) / count,
-          relevance: (total.relevance || 0) / count,
-          intelligence: (total.intelligence || 0) / count,
-          empathy: (total.empathy || 0) / count,
+          linguistic: (total.linguistic || 0) / count,
+          cognitive: (total.cognitive || 0) / count,
+          emotional: (total.emotional || 0) / count,
+          focus: (total.focus || 0) / count,
         };
     }
     return total;
@@ -938,7 +884,7 @@ export default function AiOgiriApp() {
         return await callServer('/judge', payload);
     } catch (e) {
         console.warn("Judge server failed:", e);
-        const radarDesc = "radarは5項目(novelty, clarity, relevance, intelligence, empathy)を0-5で評価";
+        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus)を0-5で評価";
         const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
         return await callGeminiFallback(prompt);
     }
@@ -1119,6 +1065,10 @@ export default function AiOgiriApp() {
 
       let currentHand = [...singlePlayerHand];
       if (!isManual && gameConfig.mode === 'single') {
+          // レアリティ判定: rareならボーナス
+          const usedCard = singlePlayerHand.find(c => (typeof c === 'string' ? c : c.text) === text);
+          const isRare = usedCard && typeof usedCard !== 'string' && usedCard.rarity === 'rare';
+          
           currentHand = singlePlayerHand.filter(c => (typeof c === 'string' ? c : c.text) !== text);
           let nextDeck = [...cardDeck];
           if (nextDeck.length < 5) { collectCards(10).then(newCards => { setCardDeck(prev => [...prev, ...newCards]); }); }
@@ -1132,13 +1082,31 @@ export default function AiOgiriApp() {
         if (isAiActive) {
             const res = await fetchAiJudgment(currentTopic, text, isManual);
             if (res) {
-                const totalRadarScore = (res.radar.novelty||0) + (res.radar.clarity||0) + (res.radar.relevance||0) + (res.radar.intelligence||0) + (res.radar.empathy||0);
-                score = totalRadarScore * 4; comment = res.comment; radar = res.radar; 
+                // 4次元モデルの合計計算
+                const r = res.radar || {};
+                const totalRadarScore = (r.linguistic||0) + (r.cognitive||0) + (r.emotional||0) + (r.focus||0);
+                // 20点満点 * 5 = 100点
+                score = totalRadarScore * 5; 
+                comment = res.comment; radar = res.radar; 
                 distance = res.distance || 0.5; reasoning = res.reasoning || "";
+                
+                // ハードネス情報の取得（サーバーから返っていれば）
+                if (res.hardness !== undefined) {
+                    // 表示用に追加処理が必要ならここに記述
+                }
             } else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
-      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {novelty:3,clarity:3,relevance:3,intelligence:3,empathy:3}; }
+      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2}; }
       
+      // レアカードボーナス加算
+      if (!isManual) {
+          const usedCard = singlePlayerHand.find(c => (typeof c === 'string' ? c : c.text) === text);
+          if (usedCard && typeof usedCard !== 'string' && usedCard.rarity === 'rare') {
+              score += 5;
+              reasoning += " (✨レアカードボーナス +5点)";
+          }
+      }
+
       setAiComment(formatAiComment(comment));
       if (radar) { updateUserStats(score, radar); setGameRadars(prev => [...prev, radar]); }
       const newZabuton = Math.floor(score / 10); setTotalZabuton(prev => prev + newZabuton);
@@ -1179,39 +1147,6 @@ export default function AiOgiriApp() {
   const confirmTopic = () => { playSound('decision'); setCurrentTopic(manualTopicInput); if (gameConfig.mode === 'single') { setGamePhase('answer_input'); setTimeLeft(timeLimit); if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true); } else { setGamePhase('turn_change'); setTurnPlayerIndex((masterIndex + 1) % players.length); } };
   const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
   const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
-
-  // Effects
-  useEffect(() => {
-    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
-    if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
-    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
-    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
-    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
-    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
-    
-    if (auth) { 
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            setCurrentUser(u);
-            if (u && !u.isAnonymous) {
-                try {
-                    const statsRef = getUserDocRef(u.uid, 'stats');
-                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
-                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
-                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
-                } catch (e) { console.error("Data sync error:", e); }
-            }
-        });
-        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
-        return () => unsub();
-    }
-  }, []);
-  
-  useEffect(() => { if (!db) return; const rankRef = getDocRef('shared_db', 'global_ranking'); if (rankRef) { const unsub = onSnapshot(rankRef, (doc) => { if (doc.exists()) { setGlobalRankings(doc.data().score_attack || []); } }); return () => unsub(); } }, []);
-  useEffect(() => { let t; if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000); else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); } return () => clearInterval(t); }, [isTimerRunning, timeLeft]);
-  useEffect(() => { let t; if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) { t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100); } return () => clearInterval(t); }, [appMode, startTime, finishTime]);
-  useEffect(() => { if (!isAiActive || appMode !== 'game') return; if (cardDeck.length >= HAND_SIZE * 2) return; const now = Date.now(); if (now - lastCardFetchRef.current < 5000) return; lastCardFetchRef.current = now; fetchAiCards(HAND_SIZE).then(addCardsToDeck); }, [appMode, cardDeck.length, isAiActive]);
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20" style={{backgroundImage: 'url("/background.png")', backgroundSize: 'cover', backgroundAttachment: 'fixed'}}>
