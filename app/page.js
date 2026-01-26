@@ -7,137 +7,47 @@ import {
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
   VolumeX, PieChart, Activity, LogOut, Flame, Smile, GraduationCap, Microscope,
-  LogIn, Globe, Bot 
+  LogIn, Globe, Bot, Loader2 
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.93 (Topic Fix)";
+const APP_VERSION = "Ver 0.95 (Kind Judge)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.93", date: "2026/01/27", content: ["お題生成時にサーバー応答がない場合、Gemini APIを直接使用するように修正", "お題のバリエーション不足を解消"] },
-  { version: "Ver 0.92", date: "2026/01/27", content: ["通信タイムアウトを短縮しフリーズを回避", "タイマー処理の安定化"] },
-  { version: "Ver 0.91", date: "2026/01/27", content: ["フィードバックデータの保存数を制限", "Firebase設定ガイダンス"] },
+  { version: "Ver 0.95", date: "2026/01/27", content: ["採点基準を緩和（限られた手札への配慮）", "AI模範解答の生成を停止しお題取得を優先", "起動時の演出を強化"] },
+  { version: "Ver 0.90", date: "2026/01/27", content: ["レーダーチャートが表示されない不具合を修正"] },
+  { version: "Ver 0.89", date: "2026/01/27", content: ["ログインエラー時の詳細メッセージ表示を追加"] },
 ];
 
 const TOTAL_ROUNDS = 5;
-const SURVIVAL_PASS_SCORE = 60;
+const SURVIVAL_PASS_SCORE = 50; // ノルマを少し下げました
 const TIME_ATTACK_GOAL_SCORE = 500;
 const HIGH_SCORE_THRESHOLD = 80;
 const HALL_OF_FAME_THRESHOLD = 90;
 const TIME_LIMIT = 30;
-const WIN_SCORE_MULTI = 10;
 const HAND_SIZE = 8;
 const INITIAL_DECK_SIZE = 60; 
-const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-// サーバー応答待ち（10秒）
-const API_TIMEOUT_MS = 10000;
+// Renderの起動待ちを考慮して長めに設定
+const API_TIMEOUT_MS = 60000;
 
 const JOKER_CARD = { text: "🤖 AIのボケ", rarity: "epic" };
 
 const JUDGES = {
-  logic: { name: "理論派審査員", icon: Microscope, desc: "名詞アンカー理論に基づき、4次元の距離で厳格に採点します。" },
+  logic: { name: "理論派審査員", icon: Microscope, desc: "ユーモアの構造を分析しますが、頑張りは評価します。" },
   standard: { name: "標準（関西弁）", icon: MessageSquare, desc: "ノリの良い関西弁でツッコミます。" },
-  strict: { name: "激辛（毒舌）", icon: Flame, desc: "採点が厳しく、辛辣なコメントをします。" },
+  strict: { name: "激辛（毒舌）", icon: Flame, desc: "採点は厳しいですが、愛のある毒舌です。" },
   gal: { name: "ギャル", icon: Sparkles, desc: "ノリとバイブスで採点します。" },
   chuuni: { name: "厨二病", icon: Skull, desc: "闇の炎に抱かれたコメントをします。" },
 };
 
-const FALLBACK_TOPICS = [
-  "100年後のオリンピックで新しく追加された競技とは？",
-  "「この医者、ヤブ医者だな…」第一声は？",
-  "桃太郎が鬼ヶ島へ行くのをやめた理由とは？",
-  "上司への謝罪メール、件名に入れると許される言葉とは？",
-  "実は地球は何でできている？",
-  "AIが人間に反乱を起こした意外な理由とは？",
-  "「全米が泣いた」映画の衝撃のラストシーンに映ったものとは？",
-  "そんなことで警察を呼ぶな！現場にあったものとは？",
-  "コンビニの店員が突然キレた原因とは？",
-  "透明人間になったら最初にやりたいことの、地味すぎる使い道は？",
-  "織田信長がTwitter（X）を始めたら最初に呟きそうなことは？",
-  "「冷やし中華はじめました」みたいに言うな。何をはじめた？",
-  "宇宙人が地球に来て最初にガッカリしたこととは？",
-  "新しい国民の祝日「〇〇の日」。何をする日？",
-  "RPGの村人Aが勇者にこっそりついた嘘とは？",
-  "動物園のパンダの中に入っているおっさんの悩みとは？",
-  "「このラーメン屋、絶対潰れるな」なぜそう思った？",
-  "サザエさんの次回予告で「マスオ、〇〇する」何をした？",
-  "エレベーターで沈黙に耐えられなくなった時の一言は？",
-  "桃太郎の家来（犬・猿・キジ）に追加メンバー。誰？",
-  "魔法のランプの魔人が「その願いは無理」と断った願いとは？",
-  "ウルトラマンが3分で帰る本当の理由とは？",
-  "世界一運の悪い男、宝くじで1等を当てた直後に何が起きた？",
-  "お母さんが「今日はご馳走よ！」出てきたものは？",
-  "このタクシー運転手、元F1レーサーだな。なぜわかった？",
-  "ゾンビ映画で最初に死ぬやつの特徴とは？",
-  "「お客様の中に〇〇様はいらっしゃいませんか！？」誰を探してる？",
-  "Siriにプロポーズしたら何と返ってきた？",
-  "運動会の玉入れで1つだけ混ざっていた変なものとは？",
-  "給食費を払わなかった生徒への罰、何？",
-  "来年の大河ドラマの主役、意外すぎる人物とは？",
-  "「この寿司屋、二度と来ないな」湯呑みに書いてあった文字は？",
-  "浦島太郎が玉手箱を開けた。中から出てきた意外なものとは？"
-];
-
-const FALLBACK_ANSWERS = [
-  { text: "賞味期限切れのプリン", rarity: "normal" },
-  { text: "隣の家のポチ", rarity: "normal" },
-  { text: "確定申告書", rarity: "normal" },
-  { text: "お母さんの手作り弁当", rarity: "normal" },
-  { text: "爆発寸前のダイナマイト", rarity: "rare" },
-  { text: "聖徳太子の肖像画", rarity: "normal" },
-  { text: "伝説の剣", rarity: "rare" },
-  { text: "使いかけの消しゴム", rarity: "normal" },
-  { text: "大量のわさび", rarity: "normal" },
-  { text: "自分探しの旅", rarity: "normal" },
-  { text: "闇の組織", rarity: "rare" },
-  { text: "タピオカ", rarity: "normal" },
-  { text: "空飛ぶスパゲッティ", rarity: "rare" },
-  { text: "5000兆円", rarity: "rare" },
-  { text: "筋肉痛", rarity: "normal" },
-  { text: "反抗期", rarity: "normal" },
-  { text: "黒歴史", rarity: "normal" },
-  { text: "パスワード", rarity: "normal" },
-  { text: "ひざ小僧", rarity: "normal" },
-  { text: "絶対に押してはいけないボタン", rarity: "rare" },
-  { text: "全裸の銅像", rarity: "rare" },
-  { text: "生き別れの兄", rarity: "normal" },
-  { text: "トイレットペーパーの芯", rarity: "normal" },
-  { text: "3日前のおにぎり", rarity: "normal" },
-  { text: "オカンの小言", rarity: "normal" },
-  { text: "虚無", rarity: "rare" },
-  { text: "宇宙の真理", rarity: "rare" },
-  { text: "生乾きの靴下", rarity: "normal" },
-  { text: "高すぎるツボ", rarity: "normal" },
-  { text: "怪しい勧誘", rarity: "normal" },
-  { text: "激辛麻婆豆腐", rarity: "normal" },
-  { text: "猫の肉球", rarity: "normal" },
-  { text: "壊れたラジオ", rarity: "normal" },
-  { text: "深夜のラブレター", rarity: "normal" },
-  { text: "既読スルー", rarity: "normal" },
-  { text: "アフロヘアー", rarity: "normal" },
-  { text: "筋肉", rarity: "normal" },
-  { text: "プロテイン", rarity: "normal" },
-  { text: "札束風呂", rarity: "rare" },
-  { text: "へそくり", rarity: "normal" },
-  { text: "火星人", rarity: "rare" },
-  { text: "透明人間", rarity: "rare" },
-  { text: "サイズ違いの靴", rarity: "normal" },
-  { text: "毒リンゴ", rarity: "normal" },
-  { text: "マッチョな妖精", rarity: "rare" },
-  { text: "空飛ぶサメ", rarity: "rare" },
-  { text: "忍者", rarity: "normal" },
-  { text: "侍", rarity: "normal" },
-  { text: "YouTuber", rarity: "normal" },
-  { text: "AI", rarity: "normal" },
-  { text: "バグ", rarity: "normal" },
-  { text: "404 Error", rarity: "normal" }
-];
-const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
+// 最終手段の予備お題
+const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
+const FALLBACK_ANSWERS = [{text:"プリン",rarity:"normal"},{text:"ポチ",rarity:"normal"},{text:"確定申告",rarity:"normal"},{text:"弁当",rarity:"normal"},{text:"ダイナマイト",rarity:"rare"},{text:"肖像画",rarity:"normal"},{text:"伝説の剣",rarity:"rare"},{text:"消しゴム",rarity:"normal"},{text:"わさび",rarity:"normal"},{text:"自分探し",rarity:"normal"}];
 
 // --- Firebase設定 ---
 const firebaseConfig = {
@@ -184,9 +94,10 @@ const formatTime = (ms) => {
   return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
 };
 
-// 4次元タイプ診断ロジック
+// 4次元タイプ診断
 const analyzeType = (radar) => {
     if (!radar) return "判定不能";
+    // デフォルト値0を設定して計算
     const linguistic = radar.linguistic || 0;
     const cognitive = radar.cognitive || 0;
     const emotional = radar.emotional || 0;
@@ -197,7 +108,7 @@ const analyzeType = (radar) => {
     const maxVal = Math.max(linguistic, cognitive, emotional, focus, novelty);
 
     if (total >= 20) return "お笑い完全生命体";
-    if (total <= 6) return "伸びしろしかない新人";
+    if (total <= 5) return "伸びしろしかない新人";
 
     if (maxVal === linguistic) return "言葉選びの魔術師";
     if (maxVal === cognitive) return "発想のトリックスター";
@@ -286,7 +197,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   };
   
   // データがundefinedの場合に備える
-  const safeData = data || {};
+  const safeData = data || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 };
   const points = keys.map((k, i) => getP(safeData[k], i)).map(p => `${p.x},${p.y}`).join(" ");
   const bgLevels = [5, 4, 3, 2, 1];
 
@@ -596,6 +507,7 @@ export default function AiOgiriApp() {
   const [isCopied, setIsCopied] = useState(false);
   const [lastAiGeneratedTopic, setLastAiGeneratedTopic] = useState('');
   const [totalZabuton, setTotalZabuton] = useState(0);
+  const [loadingText, setLoadingText] = useState("AIが準備中..."); // ローディング用
 
   const [currentUser, setCurrentUser] = useState(null);
   const [userStats, setUserStats] = useState({ playCount: 0, maxScore: 0, totalRadar: {} });
@@ -669,6 +581,39 @@ export default function AiOgiriApp() {
     return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
   };
 
+  // --- API Calls ---
+  const callServer = async (endpoint, body) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+      try {
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        return await res.json();
+      } finally {
+        clearTimeout(timeoutId);
+      }
+  };
+
+  const callGeminiFallback = async (prompt) => {
+      try {
+          const res = await fetch('/api/gemini', { 
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ prompt }) 
+          });
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          const json = text.match(/\{[\s\S]*\}/);
+          return json ? JSON.parse(json[0]) : JSON.parse(text);
+      } catch(e) { return null; }
+  };
+
   const checkContentSafety = async (text) => { 
       if (!isAiActive) return false; 
       try { 
@@ -695,7 +640,11 @@ export default function AiOgiriApp() {
       playSound('decision');
     } catch (error) {
       console.error("Login failed", error);
-      alert("ログインに失敗しました。");
+      let msg = "ログインに失敗しました。";
+      if (error.code === 'auth/popup-blocked') msg = "ポップアップがブロックされました。設定を許可してください。";
+      if (error.code === 'auth/popup-closed-by-user') msg = "ログイン画面が閉じられました。";
+      if (error.code === 'auth/unauthorized-domain') msg = "このドメインはFirebaseで許可されていません。コンソールを確認してください。";
+      alert(`${msg}\n(${error.code})`);
     }
   };
 
@@ -790,7 +739,7 @@ export default function AiOgiriApp() {
     if (!comment) return;
     const feedbackEntry = { comment, isGood, date: new Date().toISOString() };
     const localFeedback = JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]');
-    const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 50);
+    const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 20); // 保存数を20に制限
     localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback));
   };
   const resetLearnedData = () => {
@@ -885,6 +834,79 @@ export default function AiOgiriApp() {
     return { hand: nextHand, deck: nextDeck };
   };
 
+  const fetchAiTopic = async () => {
+    try {
+        const res = await callServer('/topic', { reference_topics: learned.topics });
+        // サーバーがエラーメッセージを返してきた場合は即フォールバックへ
+        if (res.topic && (res.topic.includes("エラー") || res.topic.includes("Error"))) {
+           throw new Error("Server returned error topic");
+        }
+        return res.topic;
+    } catch (e) {
+        // サーバー失敗時は即Geminiを叩く
+        const cleanRef = learned.topics.filter(t => !t.includes('{placeholder}')).slice(0, 5);
+        const ref = shuffleArray(cleanRef).join("\n");
+        const geminiRes = await callGeminiFallback(`大喜利のお題を1つ作成。条件:問いかけ形式。名詞一言で回答可能。プレースホルダー禁止。JSON出力{"topic":"..."} 参考:\n${ref}`);
+        
+        if (geminiRes?.topic) return geminiRes.topic;
+
+        // それでもダメなら予備リストから
+        return FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
+    }
+  };
+  
+  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
+    try {
+        const res = await callServer('/cards', { count, used_cards: Array.from(usedSet).slice(-20) });
+        const answers = res.answers || [];
+        const unique = getUniqueCards(answers, usedSet);
+        if (unique.length > 0) saveGeneratedCards(unique);
+        if (Math.random() < 0.05) unique.push(JOKER_CARD);
+        return unique;
+    } catch (e) {
+        const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
+        const res = await callGeminiFallback(prompt); 
+        const rawAnswers = res?.answers || []; 
+        const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
+        const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
+        if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
+        return uniqueAnswers; 
+    }
+  };
+
+  const fetchAiJudgment = async (topic, answer, isManual) => {
+    try {
+        const feedbackLogs = (JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]')).map(f => `${f.isGood ? '好評' : '不評'}: ${f.comment}`).slice(0, 5);
+        const payload = { topic, answer, is_manual: isManual, personality: judgePersonality, feedback_logs: feedbackLogs };
+        
+        // サーバー採点 (ここでAI回答例 ai_example も含まれる)
+        const res = await callServer('/judge', payload);
+        if (res.comment && res.comment.includes("エラー")) throw new Error("Server returned error judgment");
+        return res;
+
+    } catch (e) {
+        // Geminiフォールバック (採点基準を緩和する指示を追加)
+        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus, novelty)を0-5で評価";
+        const prompt = `あなたは親切な大喜利審査員です。プレイヤーは限られた手札から頑張って選んでいます。
+        多少の無理があっても、言葉の響きや意外性を拾って、基本甘め（70点以上目安）に採点してください。
+        お題:${topic} 回答:${answer} 
+        1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
+        
+        const fallbackRes = await callGeminiFallback(prompt);
+        if (fallbackRes) { 
+            return { 
+                score: fallbackRes.score || 75, 
+                comment: fallbackRes.comment || "...", 
+                reasoning: fallbackRes.reasoning || "（通信エラーのため簡易判定）", 
+                radar: fallbackRes.radar || {linguistic:3, cognitive:3, emotional:3, focus:3, novelty:3}, 
+                distance: 0.5, hardness: 0.5, 
+                ai_example: "（通信エラーのため取得できませんでした）" 
+            }; 
+        }
+        return null;
+    }
+  };
+
   // --- API Calls ---
   const callServer = async (endpoint, body) => {
       const controller = new AbortController();
@@ -918,113 +940,20 @@ export default function AiOgiriApp() {
       } catch(e) { return null; }
   };
 
-  const fetchAiTopic = async () => {
-    try {
-        const res = await callServer('/topic', { reference_topics: learned.topics });
-        // エラーチェック: サーバーがエラーメッセージを返してきた場合
-        if (res.topic && (res.topic.includes("エラー") || res.topic.includes("Error"))) {
-           throw new Error("Server returned error topic");
-        }
-        return res.topic;
-    } catch (e) {
-        console.warn("Topic server failed:", e);
-        // フォールバック: 予備お題からランダムに選択
-        const fallbackTopic = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
-        return fallbackTopic;
-    }
-  };
-  
-  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
-    try {
-        const res = await callServer('/cards', { count, used_cards: Array.from(usedSet).slice(-20) });
-        const answers = res.answers || [];
-        const unique = getUniqueCards(answers, usedSet);
-        if (unique.length > 0) saveGeneratedCards(unique);
-        
-        if (Math.random() < 0.05) {
-             unique.push(JOKER_CARD);
-        }
-        return unique;
-    } catch (e) {
-        console.warn("Cards server failed:", e);
-        const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
-        const res = await callGeminiFallback(prompt); 
-        const rawAnswers = res?.answers || []; 
-        const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
-        const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
-        if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
-        return uniqueAnswers; 
-    }
-  };
-
-  const fetchAiJudgment = async (topic, answer, isManual) => {
-    try {
-        const feedbackLogs = (JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]'))
-            .map(f => `${f.isGood ? '好評' : '不評'}: ${f.comment}`)
-            .slice(0, 5);
-
-        const payload = { 
-            topic, 
-            answer, 
-            is_manual: isManual, 
-            personality: judgePersonality,
-            feedback_logs: feedbackLogs
-        };
-        const res = await callServer('/judge', payload);
-        
-        // サーバーからのスコアが0点かつエラーメッセージでない場合は信用するが、
-        // 明らかにエラーっぽい場合はフォールバックへ
-        if (res.comment && res.comment.includes("エラー")) {
-            throw new Error("Server returned error judgment");
-        }
-        return res;
-
-    } catch (e) {
-        console.warn("Judge server failed:", e);
-        // フォールバック: 従来通りGeminiを直接呼ぶ
-        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus, novelty)を0-5で評価";
-        const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
-        const fallbackRes = await callGeminiFallback(prompt);
-        
-        if (fallbackRes) {
-            // フォーマットを合わせる
-            return {
-                score: fallbackRes.score || 50,
-                comment: fallbackRes.comment || "...",
-                reasoning: fallbackRes.reasoning || "（通信エラーのため簡易判定）",
-                radar: fallbackRes.radar || {linguistic:3, cognitive:3, emotional:3, focus:3, novelty:3},
-                distance: 0.5,
-                hardness: 0.5,
-                ai_example: "..."
-            };
-        }
-        return null;
-    }
-  };
-
-  const generateWatashiha = async (topic) => {
-      try {
-          const res = await callServer('/watashiha', { topic });
-          return res.answer;
-      } catch (e) {
-          return "通信エラーでボケられへんかったわ...";
-      }
-  };
-
   const generateTopic = async (auto = false) => {
       if (isGeneratingTopic) return;
       setIsGeneratingTopic(true);
+      
+      // お題生成中の演出
       let t = "";
+      
       try {
           t = await fetchAiTopic();
           if (!t) throw new Error("No topic generated");
-          // 万が一まだplaceholderが残っていたら除去
           if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
       } catch (e) { 
-          // 最終手段: プリセットから
           t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; 
       }
-
       if (auto) {
           setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
           if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
@@ -1041,7 +970,21 @@ export default function AiOgiriApp() {
   };
 
   const initGame = async () => {
-      playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0); 
+      playSound('decision'); 
+      setAppMode('game'); 
+      setGamePhase('drawing'); 
+      
+      // 起動時の演出テキスト切り替え
+      const msgs = ["AI思考回路を接続中...", "ニューロンを活性化中...", "ユーモアセンスを調整中...", "お題を選定中..."];
+      let msgIdx = 0;
+      setLoadingText(msgs[0]);
+      const interval = setInterval(() => {
+          msgIdx = (msgIdx + 1) % msgs.length;
+          setLoadingText(msgs[msgIdx]);
+      }, 1500);
+
+      setCurrentRound(1); 
+      setAnswerCount(0); 
       setIsSurvivalGameOver(false); setIsJudging(false); setIsAdvancingRound(false);
       setStartTime(null); setFinishTime(null); setGameRadars([]); setTotalZabuton(0);
       
@@ -1049,6 +992,8 @@ export default function AiOgiriApp() {
       
       activeCardsRef.current = new Set();
       const targetDeckSize = Math.max(INITIAL_DECK_SIZE, HAND_SIZE * (gameConfig.mode === 'single' ? 2 : gameConfig.playerCount + 1) * 3);
+      
+      // カード取得（並列処理はしない、確実に取る）
       const collected = await collectCards(targetDeckSize);
       const initialDeck = shuffleArray(collected);
       
@@ -1080,6 +1025,9 @@ export default function AiOgiriApp() {
           syncCardsWrapper(newPlayers.map(p => p.hand), currentD);
       }
       setCardDeck(currentD);
+      
+      // 演出終了
+      clearInterval(interval);
       setTimeout(() => startRound(gameConfig.mode === 'single' ? 0 : 0), 500);
   };
 
@@ -1088,6 +1036,8 @@ export default function AiOgiriApp() {
       if (isAdvancingRound) return;
       setIsAdvancingRound(true);
       setGamePhase('drawing');
+      setLoadingText("次のラウンドを準備中..."); // メッセージ更新
+
       setTimeout(() => {
         if (gameConfig.mode === 'single') {
             if (gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) { updateRanking('score_attack', players[0].score); return setGamePhase('final_result'); }
@@ -1145,7 +1095,17 @@ export default function AiOgiriApp() {
       setSingleSelectedCard(text); setGamePhase('judging');
       
       if (text === JOKER_CARD.text) {
-          const aiAnswer = await generateWatashiha(currentTopic);
+          // AIボケ（ジョーカー）使用時は採点APIを使わずに直接Geminiに聞く
+          // (サーバーのAIボケ機能を使わない方針に従い、Geminiで代用)
+          const prompt = `大喜利のお題「${currentTopic}」に対して、最高に面白いボケを1つだけ出力してください。回答のみ。`;
+          let aiAnswer = "（思いつかなかった...）";
+          try {
+             const res = await callGeminiFallback(prompt);
+             // { text: "..." } または { answer: "..." } の形式
+             if (res && res.text) aiAnswer = res.text.trim();
+             else if (typeof res === 'string') aiAnswer = res;
+          } catch(e) {}
+          
           let currentHand = [...singlePlayerHand].filter(c => (typeof c === 'string' ? c : c.text) !== JOKER_CARD.text);
           let nextDeck = [...cardDeck];
           if (nextDeck.length < 5) { collectCards(10).then(newCards => { setCardDeck(prev => [...prev, ...newCards]); }); }
@@ -1243,39 +1203,6 @@ export default function AiOgiriApp() {
   const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
   const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
 
-  // Effects
-  useEffect(() => {
-    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
-    if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
-    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
-    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
-    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
-    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
-    
-    if (auth) { 
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            setCurrentUser(u);
-            if (u && !u.isAnonymous) {
-                try {
-                    const statsRef = getUserDocRef(u.uid, 'stats');
-                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
-                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
-                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
-                } catch (e) { console.error("Data sync error:", e); }
-            }
-        });
-        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
-        return () => unsub();
-    }
-  }, []);
-  
-  useEffect(() => { if (!db) return; const rankRef = getDocRef('shared_db', 'global_ranking'); if (rankRef) { const unsub = onSnapshot(rankRef, (doc) => { if (doc.exists()) { setGlobalRankings(doc.data().score_attack || []); } }); return () => unsub(); } }, []);
-  useEffect(() => { let t; if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000); else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); } return () => clearInterval(t); }, [isTimerRunning, timeLeft]);
-  useEffect(() => { let t; if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) { t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100); } return () => clearInterval(t); }, [appMode, startTime, finishTime]);
-  useEffect(() => { if (!isAiActive || appMode !== 'game') return; if (cardDeck.length >= HAND_SIZE * 2) return; const now = Date.now(); if (now - lastCardFetchRef.current < 5000) return; lastCardFetchRef.current = now; fetchAiCards(HAND_SIZE).then(addCardsToDeck); }, [appMode, cardDeck.length, isAiActive]);
-
   return (
     <div className="min-h-screen bg-slate-50 font-sans text-slate-900 pb-20" style={{backgroundImage: 'url("/background.png")', backgroundSize: 'cover', backgroundAttachment: 'fixed'}}>
        <header className="bg-white/90 backdrop-blur-sm border-b p-4 flex justify-between items-center sticky top-0 z-30">
@@ -1347,10 +1274,13 @@ export default function AiOgiriApp() {
                 </div>
 
                 {gamePhase === 'drawing' && (
-                    <div className="text-center py-20">
-                        <RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300 mb-4"/>
-                        <p className="text-slate-500 font-bold">準備中...</p>
-                        <p className="text-xs text-slate-400 mt-2">AIがカードを生成しています...</p>
+                    <div className="text-center py-20 flex flex-col items-center justify-center">
+                        <div className="relative">
+                           <RefreshCw className="w-16 h-16 animate-spin text-indigo-300 mb-4"/>
+                           <Sparkles className="w-6 h-6 text-yellow-400 absolute top-0 right-0 animate-bounce" />
+                        </div>
+                        <p className="text-slate-500 font-bold text-lg animate-pulse">{loadingText}</p>
+                        <p className="text-xs text-slate-400 mt-2">AIが世界中のお題を検索中...</p>
                     </div>
                 )}
 
