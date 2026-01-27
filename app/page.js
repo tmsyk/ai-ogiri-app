@@ -14,13 +14,13 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.97 (Refactored)";
+const APP_VERSION = "Ver 0.99 (Ref Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.97", date: "2026/01/27", content: ["内部ロジックの定義順序を修正しビルドエラーを解消", "動作の安定性を向上"] },
-  { version: "Ver 0.96", date: "2026/01/27", content: ["更新情報画面が開けないバグを修正", "お題を常に5つ先読みする機能を実装"] },
+  { version: "Ver 0.99", date: "2026/01/27", content: ["shuffleArrayの定義位置を修正しエラーを解消", "API通信のパラメータを最適化"] },
   { version: "Ver 0.95", date: "2026/01/27", content: ["お題の重複回避ロジックを強化", "サーバー応答なし時のGemini直接利用"] },
+  { version: "Ver 0.90", date: "2026/01/27", content: ["レーダーチャートが表示されない不具合を修正"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -76,6 +76,97 @@ const getUserDocRef = (userId, col) => {
   if (!db || !userId) return null;
   const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
   return doc(db, 'artifacts', appId, 'users', userId, 'personal_data', col);
+};
+
+// --- Utils (Top Level Definitions) ---
+// shuffleArrayなどの関数をコンポーネントの外に出して確実に定義する
+const shuffleArray = (array) => {
+  if (!array) return [];
+  const newArray = [...array];
+  for (let i = newArray.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [newArray[i], newArray[j]] = [newArray[j], newArray[i]];
+  }
+  return newArray;
+};
+
+const formatTime = (ms) => {
+  if (!ms) return "--:--";
+  const minutes = Math.floor(ms / 60000);
+  const seconds = Math.floor((ms % 60000) / 1000);
+  const milliseconds = Math.floor((ms % 1000) / 10);
+  return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}.${milliseconds.toString().padStart(2, '0')}`;
+};
+
+const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
+
+const getUniqueCards = (cards, usedSet) => {
+  const unique = [];
+  const local = new Set();
+  for (const card of cards || []) {
+    const text = typeof card === 'string' ? card : card.text;
+    const normalized = normalizeCardText(text);
+    if (!normalized || usedSet.has(normalized) || local.has(normalized)) continue;
+    local.add(normalized);
+    unique.push(typeof card === 'string' ? { text: card, rarity: 'normal' } : card);
+  }
+  return unique;
+};
+
+const compactComment = (comment, maxLength = 30) => {
+  if (!comment) return "";
+  const trimmed = comment.toString().trim();
+  const split = trimmed.split(/[。！？!?]/);
+  return split[0] + (split.length > 1 ? (/[。！？!?]/.test(trimmed[split[0].length]) ? trimmed[split[0].length] : '') : '');
+};
+
+// 4次元タイプ診断ロジック
+const analyzeType = (radar) => {
+    if (!radar) return "判定不能";
+    const linguistic = radar.linguistic || 0;
+    const cognitive = radar.cognitive || 0;
+    const emotional = radar.emotional || 0;
+    const focus = radar.focus || 0;
+    const novelty = radar.novelty || 0;
+
+    const total = linguistic + cognitive + emotional + focus + novelty;
+    const maxVal = Math.max(linguistic, cognitive, emotional, focus, novelty);
+
+    if (total >= 20) return "お笑い完全生命体";
+    if (total <= 6) return "伸びしろしかない新人";
+
+    if (maxVal === linguistic) return "言葉選びの魔術師";
+    if (maxVal === cognitive) return "発想のトリックスター";
+    if (maxVal === emotional) return "感情の揺さぶり屋";
+    if (maxVal === focus) return "視点の狙撃手";
+    if (maxVal === novelty) return "孤高のシュール職人";
+    
+    return "バランスの取れたオールラウンダー";
+};
+
+// --- Web Audio API Helper ---
+const playOscillatorSound = (ctx, type, volume) => {
+  if (!ctx || volume <= 0) return;
+  try {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const now = ctx.currentTime;
+    const vol = volume * 0.3;
+
+    if (type === 'tap') {
+      osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(vol, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'decision') {
+      osc.type = 'triangle'; osc.frequency.setValueAtTime(600, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
+    } else if (type === 'card') {
+      osc.type = 'square'; osc.frequency.setValueAtTime(200, now); gain.gain.setValueAtTime(vol * 0.5, now); osc.start(now); osc.stop(now + 0.1);
+    } else if (type === 'result') {
+      osc.type = 'triangle'; osc.frequency.setValueAtTime(400, now); osc.frequency.linearRampToValueAtTime(800, now + 0.2); gain.gain.setValueAtTime(vol, now); gain.gain.linearRampToValueAtTime(0, now + 1); osc.start(now); osc.stop(now + 1);
+    } else if (type === 'timeup') {
+      osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
+    }
+  } catch (e) { console.error(e); }
 };
 
 // --- Sub Components ---
@@ -389,21 +480,6 @@ const RankingList = ({ mode, data, unit }) => (
   </div>
 );
 
-const InfoModal = ({ onClose, type }) => (
-  <ModalBase onClose={onClose} title={type === 'rule' ? "遊び方" : "更新履歴"} icon={type === 'rule' ? BookOpen : History}>
-      {type === 'rule' ? (
-        <div className="space-y-6 text-slate-700">
-          <section className="bg-slate-50 p-4 rounded-xl mb-4 border border-slate-200"><h4 className="font-bold text-lg mb-2 text-center text-slate-800">🎮 基本の流れ</h4><div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-600"><div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><MessageSquare className="w-5 h-5 text-indigo-500" /></div><p>AIがお題<br/>を作成</p></div><div className="h-0.5 w-4 bg-slate-300"></div><div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Layers className="w-5 h-5 text-green-500" /></div><p>AIのカード<br/>から選ぶ</p></div><div className="h-0.5 w-4 bg-slate-300"></div><div className="text-center"><div className="w-10 h-10 bg-white rounded-full flex items-center justify-center mx-auto mb-1 border border-slate-200"><Sparkles className="w-5 h-5 text-yellow-500" /></div><p>AIが採点<br/>＆ツッコミ</p></div></div></section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Bot className="w-5 h-5 text-gray-500" /> 使用AIモデル</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li><strong>ゲーム進行・審査</strong>: Google Gemini 2.0 Flash</li><li><strong>AIボケ回答</strong>: Watashiha GPT-6b (via Hugging Face)</li></ul></section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><User className="w-5 h-5 text-indigo-500" /> 一人で遊ぶ</h4><div className="space-y-3 text-sm"><div className="bg-indigo-50 p-3 rounded-xl"><p className="font-bold text-indigo-700 mb-1">👑 スコアアタック</p>全5回戦の合計得点を競います。</div><div className="bg-red-50 p-3 rounded-xl"><p className="font-bold text-red-700 mb-1">💀 サバイバル</p>60点未満で即終了。ラウンドが進むと合格ラインが上昇します。</div><div className="bg-blue-50 p-3 rounded-xl"><p className="font-bold text-blue-700 mb-1">⏱️ タイムアタック</p>500点到達までの「回答回数」を競います。</div><div className="bg-green-50 p-3 rounded-xl"><p className="font-bold text-green-700 mb-1">♾️ フリースタイル</p>制限なし！時間無制限の練習モード。</div></div></section>
-          <section><h4 className="font-bold text-lg mb-2 flex items-center gap-2 border-b pb-1"><Users className="w-5 h-5 text-amber-500" /> みんなで遊ぶ</h4><ul className="list-disc list-inside text-sm space-y-1 text-slate-600 ml-1"><li>親と子に分かれて対戦。</li><li>審査時に「ダミー回答」が混ざります。</li><li>親がダミーを選ぶと親が減点！</li></ul></section>
-        </div>
-      ) : (
-        <div className="space-y-4">{UPDATE_LOGS.map((log, i) => (<div key={i} className="border-l-4 border-indigo-200 pl-4 py-1"><div className="flex items-baseline gap-2 mb-1"><span className="font-bold text-lg text-slate-800">{log.version}</span><span className="text-xs text-slate-400">{log.date}</span></div><ul className="list-disc list-inside text-sm text-slate-600 space-y-0.5">{log.content.map((item, j) => <li key={j}>{item}</li>)}</ul></div>))}</div>
-      )}
-  </ModalBase>
-);
-
 // --- メインアプリ ---
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
@@ -484,7 +560,6 @@ export default function AiOgiriApp() {
   };
 
   const normalizeCardText = (card) => (typeof card === 'string' ? card.trim().replace(/\s+/g, ' ') : '');
-  
   const getUniqueCards = (cards, usedSet) => {
     const unique = [];
     const local = new Set();
@@ -586,7 +661,12 @@ export default function AiOgiriApp() {
       playSound('decision');
     } catch (error) {
       console.error("Login failed", error);
-      alert("ログインに失敗しました。");
+      let msg = "ログインに失敗しました。";
+      if (error.code === 'auth/popup-blocked') msg = "ポップアップがブロックされました。設定を許可してください。";
+      if (error.code === 'auth/popup-closed-by-user') msg = "ログイン画面が閉じられました。";
+      if (error.code === 'auth/unauthorized-domain') msg = "このドメインはFirebaseで許可されていません。コンソールを確認してください。";
+      if (error.code === 'auth/configuration-not-found') msg = "Googleログインが無効です。Firebaseコンソールで有効化してください。";
+      alert(`${msg}\n(${error.code})`);
     }
   };
 
@@ -769,7 +849,7 @@ export default function AiOgiriApp() {
         return res;
     } catch (e) {
         console.warn("Judge server failed:", e);
-        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus)を0-5で評価";
+        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus, novelty)を0-5で評価";
         const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
         const fallbackRes = await callGeminiFallback(prompt);
         if (fallbackRes) { 
@@ -1008,7 +1088,7 @@ export default function AiOgiriApp() {
                 word_texture = res.word_texture || "";
             } else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
-      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2,novelty:2}; distance = 0.5; }
+      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2}; distance = 0.5; }
       
       if (!isManual) {
           const usedCard = singlePlayerHand.find(c => (typeof c === 'string' ? c : c.text) === text);
@@ -1071,7 +1151,21 @@ export default function AiOgiriApp() {
     const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
     const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
     
-    if (auth) { const unsub = onAuthStateChanged(auth, async (u) => { setCurrentUser(u); if (u && !u.isAnonymous) { try { const statsRef = getUserDocRef(u.uid, 'stats'); if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); } const hallRef = getUserDocRef(u.uid, 'hall_of_fame'); if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); } } catch (e) { console.error("Data sync error:", e); } } }); if (!auth.currentUser) signInAnonymously(auth).catch(()=>{}); return () => unsub(); }
+    if (auth) { 
+        const unsub = onAuthStateChanged(auth, async (u) => {
+            setCurrentUser(u);
+            if (u && !u.isAnonymous) {
+                try {
+                    const statsRef = getUserDocRef(u.uid, 'stats');
+                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
+                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
+                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
+                } catch (e) { console.error("Data sync error:", e); }
+            }
+        });
+        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
+        return () => unsub();
+    }
   }, []);
   
   useEffect(() => { if (!db) return; const rankRef = getDocRef('shared_db', 'global_ranking'); if (rankRef) { const unsub = onSnapshot(rankRef, (doc) => { if (doc.exists()) { setGlobalRankings(doc.data().score_attack || []); } }); return () => unsub(); } }, []);
