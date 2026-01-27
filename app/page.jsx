@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { 
   RefreshCw, Trophy, Sparkles, MessageSquare, ThumbsUp, ThumbsDown, RotateCcw, 
   Users, User, PenTool, Layers, Eye, ArrowDown, Wand2, Home, Wifi, WifiOff, 
@@ -14,13 +14,13 @@ import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, a
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.1.00";
+const APP_VERSION = "Ver 0.1.03 (Order Fix)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
-  { version: "Ver 0.1.00", date: "2026/01/27", content: ["関数の依存関係を整理しReferenceErrorを解消", "APIリクエストの型厳格化(422修正)", "メジャーアップデート"] },
-  { version: "Ver 0.99", date: "2026/01/27", content: ["shuffleArrayの定義位置を修正", "API通信最適化"] },
-  { version: "Ver 0.95", date: "2026/01/27", content: ["お題の重複回避ロジック強化", "サーバー応答なし時のGemini直接利用"] },
+  { version: "Ver 0.1.03", date: "2026/01/27", content: ["関数定義順序を修正しReferenceErrorを解消"] },
+  { version: "Ver 0.1.02", date: "2026/01/27", content: ["結果画面でのState直接変更バグを修正", "未使用コンポーネントの統合", "ランキング表示の改善"] },
+  { version: "Ver 0.1.00", date: "2026/01/27", content: ["メジャーアップデート", "APIリクエストの型厳格化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -48,7 +48,6 @@ const JUDGES = {
 
 const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
 const FALLBACK_ANSWERS = [{text:"プリン",rarity:"normal"},{text:"ポチ",rarity:"normal"},{text:"確定申告",rarity:"normal"},{text:"弁当",rarity:"normal"},{text:"ダイナマイト",rarity:"rare"},{text:"肖像画",rarity:"normal"},{text:"伝説の剣",rarity:"rare"},{text:"消しゴム",rarity:"normal"},{text:"わさび",rarity:"normal"},{text:"自分探し",rarity:"normal"}];
-const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
 // --- Firebase設定 ---
 const firebaseConfig = {
@@ -78,7 +77,7 @@ const getUserDocRef = (userId, col) => {
   return doc(db, 'artifacts', appId, 'users', userId, 'personal_data', col);
 };
 
-// --- Utils (Global Scope) ---
+// --- Global Utils ---
 const shuffleArray = (array) => {
   if (!array) return [];
   const newArray = [...array];
@@ -126,23 +125,19 @@ const analyzeType = (radar) => {
     const emotional = radar.emotional || 0;
     const focus = radar.focus || 0;
     const novelty = radar.novelty || 0;
-
     const total = linguistic + cognitive + emotional + focus + novelty;
     const maxVal = Math.max(linguistic, cognitive, emotional, focus, novelty);
 
     if (total >= 20) return "お笑い完全生命体";
     if (total <= 6) return "伸びしろしかない新人";
-
     if (maxVal === linguistic) return "言葉選びの魔術師";
     if (maxVal === cognitive) return "発想のトリックスター";
     if (maxVal === emotional) return "感情の揺さぶり屋";
     if (maxVal === focus) return "視点の狙撃手";
     if (maxVal === novelty) return "孤高のシュール職人";
-    
     return "バランスの取れたオールラウンダー";
 };
 
-// --- Web Audio Helper ---
 const playOscillatorSound = (ctx, type, volume) => {
   if (!ctx || volume <= 0) return;
   try {
@@ -152,18 +147,11 @@ const playOscillatorSound = (ctx, type, volume) => {
     gain.connect(ctx.destination);
     const now = ctx.currentTime;
     const vol = volume * 0.3;
-
-    if (type === 'tap') {
-      osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(vol, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'decision') {
-      osc.type = 'triangle'; osc.frequency.setValueAtTime(600, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
-    } else if (type === 'card') {
-      osc.type = 'square'; osc.frequency.setValueAtTime(200, now); gain.gain.setValueAtTime(vol * 0.5, now); osc.start(now); osc.stop(now + 0.1);
-    } else if (type === 'result') {
-      osc.type = 'triangle'; osc.frequency.setValueAtTime(400, now); osc.frequency.linearRampToValueAtTime(800, now + 0.2); gain.gain.setValueAtTime(vol, now); gain.gain.linearRampToValueAtTime(0, now + 1); osc.start(now); osc.stop(now + 1);
-    } else if (type === 'timeup') {
-      osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3);
-    }
+    if (type === 'tap') { osc.type = 'sine'; osc.frequency.setValueAtTime(800, now); gain.gain.setValueAtTime(vol, now); gain.gain.exponentialRampToValueAtTime(0.01, now + 0.1); osc.start(now); osc.stop(now + 0.1); }
+    else if (type === 'decision') { osc.type = 'triangle'; osc.frequency.setValueAtTime(600, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3); }
+    else if (type === 'card') { osc.type = 'square'; osc.frequency.setValueAtTime(200, now); gain.gain.setValueAtTime(vol * 0.5, now); osc.start(now); osc.stop(now + 0.1); }
+    else if (type === 'result') { osc.type = 'triangle'; osc.frequency.setValueAtTime(400, now); osc.frequency.linearRampToValueAtTime(800, now + 0.2); gain.gain.setValueAtTime(vol, now); gain.gain.linearRampToValueAtTime(0, now + 1); osc.start(now); osc.stop(now + 1); }
+    else if (type === 'timeup') { osc.type = 'sawtooth'; osc.frequency.setValueAtTime(150, now); gain.gain.setValueAtTime(vol, now); osc.start(now); osc.stop(now + 0.3); }
   } catch (e) { console.error(e); }
 };
 
@@ -184,7 +172,6 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
   const text = typeof card === 'string' ? card : (card.text || "???");
   const isRare = typeof card !== 'string' && card.rarity === 'rare';
   const isEpic = typeof card !== 'string' && card.rarity === 'epic'; 
-  
   return (
     <button 
       onClick={() => !disabled && onClick(text)} 
@@ -207,123 +194,46 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const r = size / 2, c = size / 2, max = maxValue;
   const labels = ["言語的", "認知的", "情動的", "視点", "新規性"]; 
   const keys = ["linguistic", "cognitive", "emotional", "focus", "novelty"];
-  
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.90; 
-    return { 
-      x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
-      y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
-    };
+    return { x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) };
   };
-  
   const safeData = data || {};
   const points = keys.map((k, i) => getP(safeData[k], i)).map(p => `${p.x},${p.y}`).join(" ");
   const bgLevels = [5, 4, 3, 2, 1];
-
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {bgLevels.map(l => (
-          <polygon key={l} points={keys.map((_, i) => {
-             const radius = (l / 5) * r * 0.90;
-             return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2));
-          }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />
-        ))}
-        {keys.map((_, i) => { 
-           const radius = r * 0.90;
-           const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
-           const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
-           return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
-        })}
+        {bgLevels.map(l => ( <polygon key={l} points={keys.map((_, i) => { const radius = (l / 5) * r * 0.90; return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2)); }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" /> ))}
+        {keys.map((_, i) => { const radius = r * 0.90; const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {keys.map((_, i) => { 
-             const radius = r * 0.90 * 1.35; 
-             const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2);
-             const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2);
-             return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); 
-        })}
+        {keys.map((_, i) => { const radius = r * 0.90 * 1.35; const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
       </svg>
     </div>
   );
 };
 
 const SemanticDistanceGauge = ({ distance, hardness, wordTexture }) => {
-  let label = "";
-  let colorClass = "";
-  let position = distance * 100;
-
-  if (distance > 0.8) {
-      label = "ベタすぎ！(Boring)";
-      colorClass = "bg-blue-400";
-  } else if (distance < 0.2) {
-      label = "飛びすぎ！(Nonsense)";
-      colorClass = "bg-red-400";
-  } else {
-      label = "絶妙な距離感！(Sweet Spot)";
-      colorClass = "bg-green-500 animate-pulse";
-  }
-  
+  let label = ""; let colorClass = ""; let position = distance * 100;
+  if (distance > 0.8) { label = "ベタすぎ！(Boring)"; colorClass = "bg-blue-400"; } else if (distance < 0.2) { label = "飛びすぎ！(Nonsense)"; colorClass = "bg-red-400"; } else { label = "絶妙な距離感！(Sweet Spot)"; colorClass = "bg-green-500 animate-pulse"; }
   let textureLabel = wordTexture ? `判定: ${wordTexture}` : (hardness > 0.7 ? "カチコチ(硬)" : hardness < 0.3 ? "フニャフニャ(軟)" : "ノーマル");
-
   return (
     <div className="w-full max-w-xs mx-auto mt-2 space-y-2">
-      <div>
-          <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-            <span>Far</span>
-            <span className="font-bold text-green-600">Sweet Spot</span>
-            <span>Close</span>
-          </div>
-          <div className="h-3 bg-slate-200 rounded-full relative overflow-hidden">
-             <div className="absolute top-0 bottom-0 bg-green-200/50" style={{ left: '40%', width: '20%' }}></div>
-             <div className={`absolute top-0 bottom-0 w-2 h-3 rounded-full border border-white shadow-sm transition-all duration-1000 ${colorClass}`} style={{ left: `${Math.min(Math.max(position, 0), 98)}%` }}></div>
-          </div>
-          <p className={`text-xs font-bold text-center mt-1 ${distance >= 0.4 && distance <= 0.6 ? 'text-green-600' : 'text-slate-500'}`}>{label}</p>
-      </div>
-       <div>
-         <div className="flex justify-between text-[10px] text-slate-400 mb-1">
-            <span>軟 (Soft)</span>
-            <span>硬 (Hard)</span>
-         </div>
-         <div className="h-2 bg-slate-100 rounded-full relative">
-             <div className="absolute top-0 bottom-0 w-full bg-gradient-to-r from-pink-200 to-slate-400 rounded-full opacity-30"></div>
-             <div className="absolute top-0 bottom-0 w-2 h-2 rounded-full bg-slate-600 shadow transition-all duration-1000" style={{ left: `${Math.min(Math.max(hardness * 100, 0), 98)}%` }}></div>
-         </div>
-         <p className="text-[10px] text-center text-slate-400">{textureLabel}</p>
-      </div>
+      <div><div className="flex justify-between text-[10px] text-slate-400 mb-1"><span>Far</span><span className="font-bold text-green-600">Sweet Spot</span><span>Close</span></div><div className="h-3 bg-slate-200 rounded-full relative overflow-hidden"><div className="absolute top-0 bottom-0 bg-green-200/50" style={{ left: '40%', width: '20%' }}></div><div className={`absolute top-0 bottom-0 w-2 h-3 rounded-full border border-white shadow-sm transition-all duration-1000 ${colorClass}`} style={{ left: `${Math.min(Math.max(position, 0), 98)}%` }}></div></div><p className={`text-xs font-bold text-center mt-1 ${distance >= 0.4 && distance <= 0.6 ? 'text-green-600' : 'text-slate-500'}`}>{label}</p></div>
+      <div><div className="flex justify-between text-[10px] text-slate-400 mb-1"><span>軟 (Soft)</span><span>硬 (Hard)</span></div><div className="h-2 bg-slate-100 rounded-full relative"><div className="absolute top-0 bottom-0 w-full bg-gradient-to-r from-pink-200 to-slate-400 rounded-full opacity-30"></div><div className="absolute top-0 bottom-0 w-2 h-2 rounded-full bg-slate-600 shadow transition-all duration-1000" style={{ left: `${Math.min(Math.max(hardness * 100, 0), 98)}%` }}></div></div><p className="text-[10px] text-center text-slate-400">{textureLabel}</p></div>
     </div>
   );
 };
 
 const ZabutonStack = ({ count }) => {
-  const stack = Math.min(count, 20); 
-  const isGold = count >= 90; 
-  
+  const stack = Math.min(count, 20); const isGold = count >= 90; 
   return (
     <div className="flex flex-col items-center justify-end h-24 w-full relative mb-4">
-      {Array.from({ length: stack }).map((_, i) => (
-        <div 
-          key={i} 
-          className={`h-2 w-24 rounded-sm border-b border-black/10 absolute transition-all duration-300 ease-out
-            ${isGold ? 'bg-yellow-400 shadow-yellow-200' : 'bg-indigo-600 shadow-indigo-200'}
-          `}
-          style={{ 
-            bottom: `${i * 4}px`, 
-            zIndex: i,
-            width: `${100 - i}%`, 
-            transform: `translateY(${100 - (i*10)}%) scale(${1 - i*0.02})`,
-            animation: `slideIn 0.3s ease-out ${i * 0.05}s forwards`
-          }} 
-        />
-      ))}
+      {Array.from({ length: stack }).map((_, i) => (<div key={i} className={`h-2 w-24 rounded-sm border-b border-black/10 absolute transition-all duration-300 ease-out ${isGold ? 'bg-yellow-400 shadow-yellow-200' : 'bg-indigo-600 shadow-indigo-200'} `} style={{ bottom: `${i * 4}px`, zIndex: i, width: `${100 - i}%`, transform: `translateY(${100 - (i*10)}%) scale(${1 - i*0.02})`, animation: `slideIn 0.3s ease-out ${i * 0.05}s forwards` }} />))}
       <div className="absolute bottom-[-20px] font-bold text-slate-400 text-xs">座布団 {count}枚</div>
-      <style jsx>{`
-        @keyframes slideIn {
-          from { transform: translateY(-20px); opacity: 0; }
-          to { transform: translateY(0); opacity: 1; }
-        }
-      `}</style>
+      <style jsx>{` @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } } `}</style>
     </div>
   );
 };
@@ -331,34 +241,10 @@ const ZabutonStack = ({ count }) => {
 const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit, volume, setVolume, playSound, judgePersonality, setJudgePersonality, resetLearnedData, onLogin, onLogout, currentUser }) => (
   <ModalBase onClose={onClose} title="設定" icon={Settings}>
       <div className="mb-4 p-4 bg-indigo-50 rounded-xl border border-indigo-100">
-        {currentUser && !currentUser.isAnonymous ? (
-            <div className="flex flex-col items-center gap-2">
-                <p className="text-sm text-indigo-700 font-bold">ログイン中: {currentUser.displayName || "Google User"}</p>
-                <button onClick={onLogout} className="w-full py-2 bg-white text-indigo-600 border border-indigo-300 font-bold rounded-lg text-xs hover:bg-indigo-50 flex items-center justify-center gap-2">
-                    <LogOut className="w-4 h-4"/> ログアウト
-                </button>
-            </div>
-        ) : (
-            <div className="flex flex-col items-center gap-2">
-                <p className="text-xs text-indigo-600 mb-1">Googleでログインするとデータを保存できます</p>
-                <button onClick={onLogin} className="w-full py-2 bg-white text-indigo-600 border border-indigo-300 font-bold rounded-lg text-xs hover:bg-indigo-50 flex items-center justify-center gap-2">
-                    <LogIn className="w-4 h-4"/> Googleでログイン
-                </button>
-            </div>
-        )}
+        {currentUser && !currentUser.isAnonymous ? ( <div className="flex flex-col items-center gap-2"><p className="text-sm text-indigo-700 font-bold">ログイン中: {currentUser.displayName || "Google User"}</p><button onClick={onLogout} className="w-full py-2 bg-white text-indigo-600 border border-indigo-300 font-bold rounded-lg text-xs hover:bg-indigo-50 flex items-center justify-center gap-2"><LogOut className="w-4 h-4"/> ログアウト</button></div> ) : ( <div className="flex flex-col items-center gap-2"><p className="text-xs text-indigo-600 mb-1">Googleでログインするとデータを保存できます</p><button onClick={onLogin} className="w-full py-2 bg-white text-indigo-600 border border-indigo-300 font-bold rounded-lg text-xs hover:bg-indigo-50 flex items-center justify-center gap-2"><LogIn className="w-4 h-4"/> Googleでログイン</button></div> )}
       </div>
       <div><label className="block text-sm font-bold text-slate-700 mb-2">プレイヤー名</label><div className="relative"><input id="username" name="username" type="text" value={userName} onChange={(e) => setUserName(e.target.value)} className="w-full p-3 pl-10 bg-slate-50 border border-slate-200 rounded-xl focus:border-indigo-500 outline-none font-bold" /><User className="w-5 h-5 text-slate-400 absolute left-3 top-3.5" /></div></div>
-      <div>
-        <label className="block text-sm font-bold text-slate-700 mb-2">審査員の性格</label>
-        <div className="grid grid-cols-2 gap-2">
-          {Object.entries(JUDGES).map(([key, info]) => (
-            <button key={key} onClick={() => { setJudgePersonality(key); playSound('tap'); }} className={`p-3 rounded-xl border-2 text-left text-xs ${judgePersonality === key ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200'}`}>
-              <div className="font-bold mb-1 flex items-center gap-1"><info.icon className="w-3 h-3"/> {info.name}</div>
-              <div className="text-slate-500 text-[10px] leading-tight">{info.desc}</div>
-            </button>
-          ))}
-        </div>
-      </div>
+      <div><label className="block text-sm font-bold text-slate-700 mb-2">審査員の性格</label><div className="grid grid-cols-2 gap-2">{Object.entries(JUDGES).map(([key, info]) => ( <button key={key} onClick={() => { setJudgePersonality(key); playSound('tap'); }} className={`p-3 rounded-xl border-2 text-left text-xs ${judgePersonality === key ? 'border-indigo-600 bg-indigo-50' : 'border-slate-200'}`}><div className="font-bold mb-1 flex items-center gap-1"><info.icon className="w-3 h-3"/> {info.name}</div><div className="text-slate-500 text-[10px] leading-tight">{info.desc}</div></button> ))}</div></div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2 flex items-center gap-1">{volume === 0 ? <VolumeX className="w-3 h-3"/> : <Volume2 className="w-3 h-3"/>} 音量: {Math.round(volume * 100)}%</label><input type="range" min="0" max="1" step="0.1" value={volume} onChange={(e) => { const v = parseFloat(e.target.value); setVolume(v); playSound('tap', v); }} className="w-full accent-indigo-600" /></div>
       <div><label className="block text-xs font-bold text-slate-500 mb-2">制限時間: {timeLimit}秒</label><input type="range" min="10" max="60" step="5" value={timeLimit} onChange={(e) => setTimeLimit(parseInt(e.target.value))} className="w-full accent-indigo-600" /></div>
       <div className="pt-4 border-t border-slate-100"><button onClick={resetLearnedData} className="w-full py-2 text-xs text-red-500 hover:bg-red-50 rounded-lg flex items-center justify-center gap-1 transition-colors"><Trash2 className="w-3 h-3" /> 学習データの削除</button></div>
@@ -366,84 +252,38 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
 );
 
 const MyDataModal = ({ stats, onClose, userName }) => {
-  const getTotalAverage = () => {
-    const count = stats.playCount || 1;
-    // 修正: 4次元モデル+新規性のキーで統一
-    const total = stats.totalRadar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 };
-    return {
-      linguistic: (total.linguistic || 0) / count,
-      cognitive: (total.cognitive || 0) / count,
-      emotional: (total.emotional || 0) / count,
-      focus: (total.focus || 0) / count,
-      novelty: (total.novelty || 0) / count,
-    };
-  };
-  const avgData = getTotalAverage();
-  const typeDiagnosis = analyzeType(avgData);
-
+  const getTotalAverage = () => { const count = stats.playCount || 1; const total = stats.totalRadar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 }; return { linguistic: (total.linguistic || 0) / count, cognitive: (total.cognitive || 0) / count, emotional: (total.emotional || 0) / count, focus: (total.focus || 0) / count, novelty: (total.novelty || 0) / count, }; };
+  const avgData = getTotalAverage(); const typeDiagnosis = analyzeType(avgData);
   return (
     <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
         <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
         <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-16 mt-8">
-            <p className="text-sm font-bold text-indigo-800 mb-6 flex items-center gap-2"><PieChart className="w-4 h-4"/> 芸風分析</p>
-            <RadarChart data={avgData} size={200} maxValue={5} />
-             <div className="mt-8 bg-white p-3 rounded-xl w-full text-center shadow-sm">
-                <p className="text-xs text-slate-400 mb-1">あなたのタイプ</p>
-                <p className="text-lg font-black text-indigo-600">{typeDiagnosis}</p>
-            </div>
-        </div>
+        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-16 mt-8"><p className="text-sm font-bold text-indigo-800 mb-6 flex items-center gap-2"><PieChart className="w-4 h-4"/> 芸風分析</p><RadarChart data={avgData} size={200} maxValue={5} /><div className="mt-8 bg-white p-3 rounded-xl w-full text-center shadow-sm"><p className="text-xs text-slate-400 mb-1">あなたのタイプ</p><p className="text-lg font-black text-indigo-600">{typeDiagnosis}</p></div></div>
     </ModalBase>
   );
 };
 
-const HallOfFameModal = ({ onClose, data, globalRankings, activeTab, setActiveTab }) => {
-  const localSorted = [...data].sort((a, b) => b.score - a.score).slice(0, 3);
-  const globalSorted = globalRankings ? [...globalRankings].sort((a, b) => b.score - a.score).slice(0, 10) : [];
+const RankingList = ({ mode, data, unit }) => (
+  <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200 w-full">
+    <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>{mode === 'score_attack' ? '歴代トップ3' : 'ランキング'}</span></div>
+    {data && data.length > 0 ? ( <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><div className="flex items-center gap-2"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-slate-700">{rank.player || 'Unknown'}</span></div><div className="text-right"><span className="font-bold text-indigo-700">{rank.score !== undefined ? rank.score : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit || '点'}</span></span></div></li>))}</ul> ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
+  </div>
+);
 
+const HallOfFameModal = ({ onClose, data, globalRankings, activeTab, setActiveTab }) => {
+  const localSorted = [...data].sort((a, b) => b.score - a.score).slice(0, 3); 
+  const globalSorted = globalRankings ? [...globalRankings].sort((a, b) => b.score - a.score).slice(0, 10) : [];
+  
   return (
     <ModalBase onClose={onClose} title="殿堂入り" icon={Crown}>
-        <div className="flex justify-center gap-2 mb-4">
-            <button onClick={() => setActiveTab('local')} className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${activeTab === 'local' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>自分の記録</button>
-            <button onClick={() => setActiveTab('global')} className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'global' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}><Globe className="w-3 h-3"/> 全国トップ10</button>
-        </div>
-
+        <div className="flex justify-center gap-2 mb-4"><button onClick={() => setActiveTab('local')} className={`px-4 py-2 rounded-full text-xs font-bold transition-all ${activeTab === 'local' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}>自分の記録</button><button onClick={() => setActiveTab('global')} className={`px-4 py-2 rounded-full text-xs font-bold transition-all flex items-center gap-1 ${activeTab === 'global' ? 'bg-indigo-600 text-white' : 'bg-slate-100 text-slate-500'}`}><Globe className="w-3 h-3"/> 全国トップ10</button></div>
         <div className="space-y-4 max-h-[50vh] overflow-y-auto pr-2">
-            {activeTab === 'local' ? (
-                localSorted.length === 0 ? (
-                    <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p>
-                ) : (
-                    localSorted.map((item, i) => (
-                        <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">
-                             {i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}
-                            <div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div>
-                            <p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p>
-                            <p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p>
-                            <div className="flex justify-center my-2">
-                               {item.radar && <RadarChart data={item.radar} size={100} maxValue={5} />}
-                            </div>
-                            <div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div>
-                        </div>
-                    ))
-                )
-            ) : (
-                globalSorted.length === 0 ? (
-                    <p className="text-center text-slate-400 py-10">読み込み中、またはランキングがありません。</p>
-                ) : (
-                    globalSorted.map((item, i) => (
-                        <div key={i} className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex items-center gap-3">
-                             <div className={`text-xl font-black w-8 text-center ${i < 3 ? 'text-yellow-500' : 'text-slate-400'}`}>{i + 1}</div>
-                             <div className="flex-1">
-                                 <div className="flex justify-between items-baseline mb-1">
-                                     <span className="font-bold text-sm text-indigo-900 truncate max-w-[120px]">{item.player}</span>
-                                     <span className="font-black text-indigo-600 text-lg">{item.score}点</span>
-                                 </div>
-                                 <p className="text-xs text-slate-500 line-clamp-1">題: {item.topic}</p>
-                                 <p className="text-sm font-bold text-slate-700 line-clamp-1">"{item.answer}"</p>
-                             </div>
-                        </div>
-                    ))
-                )
+            {activeTab === 'local' ? ( 
+                localSorted.length === 0 ? ( <p className="text-center text-slate-400 py-10">まだ殿堂入りはありません。<br/>90点以上を目指そう！</p> ) : ( 
+                    localSorted.map((item, i) => ( <div key={i} className="bg-yellow-50 border border-yellow-200 rounded-xl p-4 shadow-sm relative">{i < 3 && <div className="absolute top-2 right-2 text-2xl">{i === 0 ? '🥇' : i === 1 ? '🥈' : '🥉'}</div>}<div className="text-xs text-slate-500 mb-1 flex justify-between"><span>{item.date} by {item.player}</span><span className="font-bold text-yellow-700 text-lg">{item.score}点</span></div><p className="font-bold text-slate-700 text-sm mb-2">お題: {item.topic}</p><p className="text-xl font-black text-indigo-700 mb-2">"{item.answer}"</p><div className="flex justify-center my-2">{item.radar && <RadarChart data={item.radar} size={100} maxValue={5} />}</div><div className="bg-white/60 p-2 rounded text-xs text-slate-600 italic">AI: {item.comment}</div></div> )) 
+                ) 
+            ) : ( 
+                <RankingList mode="score_attack" data={globalSorted} unit="点" />
             )}
         </div>
     </ModalBase>
@@ -452,30 +292,10 @@ const HallOfFameModal = ({ onClose, data, globalRankings, activeTab, setActiveTa
 
 const TopicDisplay = ({ topic, answer, gamePhase, mode, topicFeedback, onFeedback, onReroll, hasRerolled, isGenerating, singleMode }) => (
   <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg mb-6 relative overflow-hidden min-h-[140px] flex flex-col justify-center transition-all duration-300">
-    <div className="absolute top-2 right-2 flex gap-2 z-20">
-       {gamePhase === 'answer_input' && mode === 'single' && (
-           <div className="flex gap-2">
-               {topicFeedback === null ? (
-                  <button onClick={() => onFeedback(true)} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/10 hover:bg-yellow-400/80 hover:text-yellow-900 text-white transition-all backdrop-blur-sm border border-white/20"><Star className="w-3 h-3" /> 良問</button>
-               ) : ( <span className="text-[10px] px-2 py-1 rounded bg-yellow-400 text-yellow-900 flex items-center gap-1 font-bold animate-in zoom-in"><Check className="w-3 h-3" /> 評価済</span> )}
-               {singleMode !== 'freestyle' && (
-                   <button onClick={onReroll} disabled={hasRerolled || isGenerating} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded backdrop-blur-sm border border-white/20 transition-all ${hasRerolled ? 'bg-slate-700/50 text-slate-400 cursor-not-allowed' : 'bg-white/10 hover:bg-white/30 text-white'}`}><RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />{hasRerolled ? '変更済' : 'お題変更'}</button>
-               )}
-           </div>
-       )}
-    </div>
+    <div className="absolute top-2 right-2 flex gap-2 z-20">{gamePhase === 'answer_input' && mode === 'single' && ( <div className="flex gap-2">{topicFeedback === null ? ( <button onClick={() => onFeedback(true)} className="flex items-center gap-1 text-[10px] px-2 py-1 rounded bg-white/10 hover:bg-yellow-400/80 hover:text-yellow-900 text-white transition-all backdrop-blur-sm border border-white/20"><Star className="w-3 h-3" /> 良問</button> ) : ( <span className="text-[10px] px-2 py-1 rounded bg-yellow-400 text-yellow-900 flex items-center gap-1 font-bold animate-in zoom-in"><Check className="w-3 h-3" /> 評価済</span> )}{singleMode !== 'freestyle' && ( <button onClick={onReroll} disabled={hasRerolled || isGenerating} className={`flex items-center gap-1 text-[10px] px-2 py-1 rounded backdrop-blur-sm border border-white/20 transition-all ${hasRerolled ? 'bg-slate-700/50 text-slate-400 cursor-not-allowed' : 'bg-white/10 hover:bg-white/30 text-white'}`}><RefreshCw className={`w-3 h-3 ${isGenerating ? 'animate-spin' : ''}`} />{hasRerolled ? '変更済' : 'お題変更'}</button> )}</div> )}</div>
     <MessageSquare className="absolute top-[-10px] right-[-10px] w-32 h-32 text-white/5" />
     <h3 className="text-indigo-300 text-xs font-bold uppercase tracking-wider mb-2 relative z-10">お題</h3>
     <p className="text-xl md:text-2xl font-bold leading-relaxed relative z-10">{topic}</p>
-  </div>
-);
-
-const RankingList = ({ mode, data, unit }) => (
-  <div className="bg-slate-50 p-4 rounded-xl text-left border border-slate-200">
-    <div className="flex items-center gap-2 mb-3 font-bold text-slate-600"><Crown className="w-4 h-4 text-yellow-500" /><span>歴代トップ3</span></div>
-    {data && data.length > 0 ? (
-      <ul className="space-y-2 text-sm">{data.map((rank, i) => (<li key={i} className="flex justify-between items-center border-b border-slate-100 last:border-0 pb-1"><span className="font-bold text-slate-500 w-6">#{i+1}</span><span className="font-bold text-indigo-700">{mode === 'time_attack' ? `${rank.value}回` : rank.value}<span className="text-xs text-slate-400 font-normal ml-1">{unit}</span></span><span className="text-xs text-slate-400">{rank.date}</span></li>))}</ul>
-    ) : (<p className="text-xs text-slate-400 text-center py-2">記録はまだありません</p>)}
   </div>
 );
 
@@ -496,6 +316,7 @@ const InfoModal = ({ onClose, type }) => (
 
 // --- メインアプリ ---
 export default function AiOgiriApp() {
+  // --- States ---
   const [appMode, setAppMode] = useState('title');
   const [gameConfig, setGameConfig] = useState({ mode: 'single', singleMode: 'score_attack', playerCount: 3 });
   const [judgePersonality, setJudgePersonality] = useState('logic'); 
@@ -551,6 +372,9 @@ export default function AiOgiriApp() {
   const [globalRankings, setGlobalRankings] = useState([]); 
   const [rankings, setRankings] = useState({});
   const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
+  // Refでlearnedの最新状態を追跡
+  const learnedRef = useRef({ topics: [], answers: [], pool: [] });
+
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
   const activeCardsRef = useRef(new Set());
@@ -559,7 +383,42 @@ export default function AiOgiriApp() {
   const [hallTab, setHallTab] = useState('local'); 
   const audioCtx = useRef(null);
 
-  // --- Functions ---
+  // --- Effects for initialization ---
+  useEffect(() => {
+    learnedRef.current = learned;
+  }, [learned]);
+
+  useEffect(() => {
+    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
+    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
+    if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
+    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
+    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
+    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
+    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
+    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
+    
+    if (auth) { 
+        const unsub = onAuthStateChanged(auth, async (u) => {
+            setCurrentUser(u);
+            if (u && !u.isAnonymous) {
+                try {
+                    const statsRef = getUserDocRef(u.uid, 'stats');
+                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
+                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
+                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
+                } catch (e) { console.error("Data sync error:", e); }
+            }
+        });
+        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
+        return () => unsub();
+    }
+  }, []);
+  
+  useEffect(() => { if (!db) return; const rankRef = getDocRef('shared_db', 'global_ranking'); if (rankRef) { const unsub = onSnapshot(rankRef, (doc) => { if (doc.exists()) { setGlobalRankings(doc.data().score_attack || []); } }); return () => unsub(); } }, []);
+
+  // --- Functions (再配置: API呼び出しや基本関数を先に定義) ---
+
   const playSound = (type) => {
       if (volume <= 0 || typeof window === 'undefined') return;
       if (!audioCtx.current) {
@@ -573,87 +432,49 @@ export default function AiOgiriApp() {
       }
   };
 
-  const handleBackToTitle = () => {
-    if (window.confirm('タイトル画面に戻りますか？')) {
-      playSound('tap'); setIsTimerRunning(false); setAppMode('title');
-    }
-  };
-
-  const handleLogin = async () => {
-    const provider = new GoogleAuthProvider();
-    try {
-      await signInWithPopup(auth, provider);
-      playSound('decision');
-    } catch (error) {
-      console.error("Login failed", error);
-      alert("ログインに失敗しました。");
-    }
-  };
-
-  const handleLogout = async () => {
-    if(window.confirm('ログアウトしますか？')) {
-        try {
-            await signOut(auth);
-            playSound('tap');
-        } catch (error) {
-            console.error("Logout failed", error);
-        }
-    }
-  };
-
-  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
-  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
-  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
-
-  const updateUserStats = (score, radar) => {
-      setUserStats(prev => {
-          const newCount = (prev.playCount || 0) + 1;
-          const newMax = Math.max(prev.maxScore || 0, score);
-          const prevRadar = prev.totalRadar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 };
-          const r = radar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 };
-          const newRadar = {
-              linguistic: (prevRadar.linguistic || 0) + (r.linguistic || 0),
-              cognitive: (prevRadar.cognitive || 0) + (r.cognitive || 0),
-              emotional: (prevRadar.emotional || 0) + (r.emotional || 0),
-              focus: (prevRadar.focus || 0) + (r.focus || 0),
-              novelty: (prevRadar.novelty || 0) + (r.novelty || 0),
-          };
-          const newData = { playCount: newCount, maxScore: newMax, totalRadar: newRadar };
-          localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData));
-          if (currentUser && !currentUser.isAnonymous) { const ref = getUserDocRef(currentUser.uid, 'stats'); if (ref) setDoc(ref, newData).catch(console.error); }
-          return newData;
-      });
-  };
-
-  const saveToHallOfFame = async (entry) => {
-    const newHall = [...hallOfFame, entry].sort((a, b) => b.score - a.score).slice(0, 3);
-    setHallOfFame(newHall);
-    localStorage.setItem('aiOgiriHallOfFame', JSON.stringify(newHall));
-    if (currentUser && !currentUser.isAnonymous) {
-        const ref = getUserDocRef(currentUser.uid, 'hall_of_fame');
-        if (ref) await setDoc(ref, { entries: newHall }).catch(console.error);
-    }
-  };
-  
-  const checkAndSaveGlobalRank = async (entry) => {
-      if (!db) return;
-      const rankRef = getDocRef('shared_db', 'global_ranking');
+  const callServer = async (endpoint, body) => {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
       try {
-          await runTransaction(db, async (transaction) => {
-              const sfDoc = await transaction.get(rankRef);
-              let ranks = [];
-              if (sfDoc.exists()) {
-                  ranks = sfDoc.data().score_attack || [];
-              }
-              ranks.push(entry);
-              ranks.sort((a, b) => b.score - a.score);
-              const top10 = ranks.slice(0, 10);
-              
-              if (JSON.stringify(ranks) !== JSON.stringify(top10) || ranks.length <= 10) {
-                  transaction.set(rankRef, { score_attack: top10 }, { merge: true });
-              }
+        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+        if (!res.ok) throw new Error(`Server error: ${res.status}`);
+        return await res.json();
+      } finally {
+        clearTimeout(timeoutId);
+      }
+  };
+
+  const callGeminiFallback = async (prompt) => {
+      try {
+          const res = await fetch('/api/gemini', { 
+              method: 'POST', 
+              headers: { 'Content-Type': 'application/json' }, 
+              body: JSON.stringify({ prompt }) 
           });
-      } catch (e) { console.error("Global ranking update failed: ", e); }
+          if (!res.ok) throw new Error();
+          const data = await res.json();
+          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+          const json = text.match(/\{[\s\S]*\}/);
+          return json ? JSON.parse(json[0]) : JSON.parse(text);
+      } catch(e) { return null; }
+  };
+
+  // --- Helper Functions (定義順序を修正) ---
+
+  const registerActiveCards = (cards) => {
+    cards.forEach(card => activeCardsRef.current.add(card.text));
+  };
+
+  const addCardsToDeck = (cards) => {
+    const uniqueCards = getUniqueCards(cards, activeCardsRef.current);
+    if (uniqueCards.length === 0) return;
+    registerActiveCards(uniqueCards);
+    setCardDeck(prev => [...prev, ...uniqueCards]);
   };
 
   const saveGeneratedCards = async (newCards) => {
@@ -665,68 +486,91 @@ export default function AiOgiriApp() {
     setLearned(newLocalData);
     localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
   };
-  const saveLearnedTopic = async (newTopic) => {
-    if (newTopic.includes('{placeholder}')) return;
-    const newLocalData = { ...learned, topics: [...learned.topics, newTopic] };
-    setLearned(newLocalData);
-    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
-  };
-  const saveLearnedAnswer = async (newAnswer) => {
-    const newLocalData = { ...learned, goodAnswers: [...learned.goodAnswers, newAnswer] };
-    setLearned(newLocalData);
-    localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData));
+
+  const fetchAiTopic = async () => {
+    try {
+        const res = await callServer('/topic', { reference_topics: learnedRef.current.topics });
+        if (res.topic && (res.topic.includes("エラー") || res.topic.includes("Error"))) {
+           throw new Error("Server returned error topic");
+        }
+        return res.topic;
+    } catch (e) {
+        console.warn("Topic server failed:", e);
+        const fallbackTopic = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
+        return fallbackTopic;
+    }
   };
   
-  const saveAiCommentFeedback = async (comment, isGood) => {
-    if (!comment) return;
-    const feedbackEntry = { comment, isGood, date: new Date().toISOString() };
-    const localFeedback = JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]');
-    const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 20);
-    localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback));
-    if (currentUser && !currentUser.isAnonymous) {
-        const ref = getUserDocRef(currentUser.uid, 'feedback');
-        if (ref) await setDoc(ref, { entries: nextFeedback }).catch(console.error);
+  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
+    try {
+        const payload = { count: Number(count), used_cards: Array.from(usedSet).map(String).slice(-20) };
+        const res = await callServer('/cards', payload);
+        const answers = res.answers || [];
+        const unique = getUniqueCards(answers, usedSet);
+        if (unique.length > 0) saveGeneratedCards(unique);
+        
+        if (Math.random() < 0.05) unique.push(JOKER_CARD);
+        return unique;
+    } catch (e) {
+        console.warn("Cards server failed:", e);
+        const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
+        const res = await callGeminiFallback(prompt); 
+        const rawAnswers = res?.answers || []; 
+        const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
+        const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
+        if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
+        return uniqueAnswers; 
     }
   };
 
-  const resetLearnedData = () => {
-    if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) {
-      localStorage.removeItem('aiOgiriLearnedData');
-      setLearned({ topics: [], answers: [], pool: [] });
-      setTopicsList([...FALLBACK_TOPICS]);
-      playSound('timeup');
-      alert("リセットしました。");
+  const fetchAiJudgment = async (topic, answer, isManual) => {
+    try {
+        const feedbackLogs = (JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]')).map(f => `${f.isGood ? '好評' : '不評'}: ${f.comment}`).slice(0, 5);
+        const payload = { topic, answer, is_manual: isManual, personality: judgePersonality, feedback_logs: feedbackLogs };
+        const res = await callServer('/judge', payload);
+        if (res.comment && res.comment.includes("エラー")) throw new Error("Server returned error judgment");
+        return res;
+    } catch (e) {
+        console.warn("Judge server failed:", e);
+        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus, novelty)を0-5で評価";
+        const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
+        const fallbackRes = await callGeminiFallback(prompt);
+        if (fallbackRes) { 
+            return { 
+                score: fallbackRes.score || 50, 
+                comment: fallbackRes.comment || "...", 
+                reasoning: fallbackRes.reasoning || "（通信エラーのため簡易判定）", 
+                radar: fallbackRes.radar || {linguistic:3, cognitive:3, emotional:3, focus:3, novelty:3}, 
+                distance: 0.5, hardness: 0.5, ai_example: "..." 
+            }; 
+        }
+        return null;
     }
   };
-  const updateRanking = async (modeName, value) => {
-    setRankings(prev => {
-      const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry];
-      if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); 
-      const top3 = newList.slice(0, 3); const newRankings = { ...rankings, [modeName]: top3 };
-      localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings)); return newRankings;
-    });
-  };
-  
-  const getFinalGameRadar = () => {
-      if (gameRadars.length === 0) return { novelty: 3, clarity: 3, relevance: 3, intelligence: 3, empathy: 3 };
-      const sum = gameRadars.reduce((acc, curr) => ({
-          novelty: acc.novelty + (curr.novelty || 0),
-          clarity: acc.clarity + (curr.clarity || 0),
-          relevance: acc.relevance + (curr.relevance || 0),
-          intelligence: acc.intelligence + (curr.intelligence || 0),
-          empathy: acc.empathy + (curr.empathy || 0),
-       }), { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 });
-      
-      const count = gameRadars.length;
-      return {
-          novelty: sum.novelty / count,
-          clarity: sum.clarity / count,
-          relevance: sum.relevance / count,
-          intelligence: sum.intelligence / count,
-          empathy: sum.empathy / count,
-      };
+
+  const generateWatashiha = async (topic) => {
+      try {
+          const res = await callServer('/watashiha', { topic });
+          return res.answer;
+      } catch (e) {
+          return "通信エラーでボケられへんかったわ...";
+      }
   };
 
+  const checkContentSafety = async (text) => { 
+      if (!isAiActive) return false; 
+      try { 
+          const res = await callGeminiFallback(`あなたはモデレーターです。"${text}"が不適切ならtrueを {"isInappropriate": boolean} で返して`); 
+          return res?.isInappropriate || false; 
+      } catch (e) { return false; } 
+  };
+
+  const formatAiComment = (comment) => {
+    if (!comment) return "";
+    return compactComment(comment);
+  };
+
+  // --- State-dependent Helper Functions ---
   const collectCards = async (count) => {
     const collected = [];
     let remaining = count;
@@ -781,157 +625,15 @@ export default function AiOgiriApp() {
     return { hand: nextHand, deck: nextDeck };
   };
 
-  // --- API Calls ---
-  const callServer = async (endpoint, body) => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS);
-      try {
-        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body),
-          signal: controller.signal
-        });
-        if (!res.ok) throw new Error(`Server error: ${res.status}`);
-        return await res.json();
-      } finally {
-        clearTimeout(timeoutId);
-      }
-  };
-
-  const callGeminiFallback = async (prompt) => {
-      try {
-          const res = await fetch('/api/gemini', { 
-              method: 'POST', 
-              headers: { 'Content-Type': 'application/json' }, 
-              body: JSON.stringify({ prompt }) 
-          });
-          if (!res.ok) throw new Error();
-          const data = await res.json();
-          const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-          const json = text.match(/\{[\s\S]*\}/);
-          return json ? JSON.parse(json[0]) : JSON.parse(text);
-      } catch(e) { return null; }
-  };
-
-  const fetchAiTopic = async () => {
-    try {
-        const res = await callServer('/topic', { reference_topics: learned.topics });
-        // エラーチェック: サーバーがエラーメッセージを返してきた場合
-        if (res.topic && (res.topic.includes("エラー") || res.topic.includes("Error"))) {
-           throw new Error("Server returned error topic");
-        }
-        return res.topic;
-    } catch (e) {
-        console.warn("Topic server failed:", e);
-        // フォールバック: 予備お題からランダムに選択
-        const fallbackTopic = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
-        return fallbackTopic;
-    }
+  const syncActiveCards = (hands, deck) => {
+    const next = new Set();
+    hands.flat().forEach(card => next.add(card.text));
+    deck.forEach(card => next.add(card.text));
+    activeCardsRef.current = next;
   };
   
-  const fetchAiCards = async (count = 10, usedSet = usedCardsRef.current) => {
-    try {
-        // countを整数化、usedSetを配列化して文字列であることを保証
-        const payload = { 
-            count: Number(count), 
-            used_cards: Array.from(usedSet).map(String).slice(-20) 
-        };
-        const res = await callServer('/cards', payload);
-        const answers = res.answers || [];
-        const unique = getUniqueCards(answers, usedSet);
-        if (unique.length > 0) saveGeneratedCards(unique);
-        
-        if (Math.random() < 0.05) {
-             unique.push(JOKER_CARD);
-        }
-        return unique;
-    } catch (e) {
-        console.warn("Cards server failed:", e);
-        const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`; 
-        const res = await callGeminiFallback(prompt); 
-        const rawAnswers = res?.answers || []; 
-        const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a); 
-        const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet); 
-        if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers); 
-        return uniqueAnswers; 
-    }
-  };
-
-  const fetchAiJudgment = async (topic, answer, isManual) => {
-    try {
-        const feedbackLogs = (JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]'))
-            .map(f => `${f.isGood ? '好評' : '不評'}: ${f.comment}`)
-            .slice(0, 5);
-
-        const payload = { 
-            topic, 
-            answer, 
-            is_manual: isManual, 
-            personality: judgePersonality,
-            feedback_logs: feedbackLogs
-        };
-        const res = await callServer('/judge', payload);
-        
-        // サーバーからのスコアが0点かつエラーメッセージでない場合は信用するが、
-        // 明らかにエラーっぽい場合はフォールバックへ
-        if (res.comment && res.comment.includes("エラー")) {
-            throw new Error("Server returned error judgment");
-        }
-        return res;
-
-    } catch (e) {
-        console.warn("Judge server failed:", e);
-        // フォールバック: 従来通りGeminiを直接呼ぶ
-        const radarDesc = "radarは4項目(linguistic, cognitive, emotional, focus, novelty)を0-5で評価";
-        const prompt = `お題:${topic} 回答:${answer} 1.採点(0-100) 2.ツッコミ 3.${radarDesc} 4.解説(reasoning) 出力JSON: {"score":0, "comment":"...", "reasoning":"...", "radar":{...}}`;
-        const fallbackRes = await callGeminiFallback(prompt);
-        
-        if (fallbackRes) {
-            // フォーマットを合わせる
-            return {
-                score: fallbackRes.score || 50,
-                comment: fallbackRes.comment || "...",
-                reasoning: fallbackRes.reasoning || "（通信エラーのため簡易判定）",
-                radar: fallbackRes.radar || {linguistic:3, cognitive:3, emotional:3, focus:3, novelty:3},
-                distance: 0.5,
-                hardness: 0.5,
-                ai_example: "..."
-            };
-        }
-        return null;
-    }
-  };
-
-  const generateWatashiha = async (topic) => {
-      try {
-          const res = await callServer('/watashiha', { topic });
-          return res.answer;
-      } catch (e) {
-          return "通信エラーでボケられへんかったわ...";
-      }
-  };
-
-  const generateTopic = async (auto = false) => {
-      if (isGeneratingTopic) return;
-      setIsGeneratingTopic(true);
-      let t = "";
-      try {
-          t = await fetchAiTopic();
-          if (!t) throw new Error("No topic generated");
-          // 万が一まだplaceholderが残っていたら除去
-          if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
-      } catch (e) { 
-          // 最終手段: プリセットから
-          t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; 
-      }
-
-      if (auto) {
-          setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
-          if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
-      } else { setManualTopicInput(t); }
-      setIsGeneratingTopic(false);
-      fillTopicQueue();
+  const syncCardsWrapper = (hands, deck) => {
+      syncActiveCards(hands, deck);
   };
 
   const fillTopicQueue = async () => {
@@ -941,7 +643,6 @@ export default function AiOgiriApp() {
     try {
         let t = "";
         try {
-            // ここはあえてcallServerを直接呼ばず、fetchAiTopicを経由してエラーハンドリングを一元化
             t = await fetchAiTopic();
         } catch(e) {
             console.warn(e);
@@ -951,6 +652,29 @@ export default function AiOgiriApp() {
         }
     } catch (e) { console.warn("Prefetch fail", e); }
     finally { isPreloadingRef.current = false; if (topicQueueRef.current.length < 5) setTimeout(fillTopicQueue, 2000); }
+  };
+
+  const generateTopic = async (auto = false) => {
+      if (isGeneratingTopic) return;
+      setIsGeneratingTopic(true);
+      let t = "";
+      if (topicQueueRef.current.length > 0) {
+          t = topicQueueRef.current.shift();
+      } else {
+          try {
+              t = await fetchAiTopic();
+              if (!t) throw new Error("No topic generated");
+              if (t.includes('{placeholder}')) t = t.replace(/{placeholder}|「{placeholder}」/g, "？？？");
+          } catch (e) { 
+              t = FALLBACK_TOPICS[Math.floor(Math.random()*FALLBACK_TOPICS.length)]; 
+          }
+      }
+      if (auto) {
+          setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit); 
+          if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
+      } else { setManualTopicInput(t); }
+      setIsGeneratingTopic(false);
+      fillTopicQueue();
   };
 
   const startRound = (turn) => {
@@ -1100,7 +824,7 @@ export default function AiOgiriApp() {
 
       let currentHand = [...singlePlayerHand];
       if (!isManual && gameConfig.mode === 'single') {
-          // 修正: カード消費ロジック (filterではなくspliceを使うなどして1枚だけ消す)
+          // カード消費ロジック
           const cardIndex = currentHand.findIndex(c => (typeof c === 'string' ? c : c.text) === text);
           if (cardIndex > -1) {
               currentHand.splice(cardIndex, 1);
@@ -1129,16 +853,7 @@ export default function AiOgiriApp() {
                 word_texture = res.word_texture || "";
             } else throw new Error("AI response null");
         } else { throw new Error("AI inactive"); }
-      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2,novelty:2}; distance = 0.5; }
-      
-      // レアカードボーナス加算
-      if (!isManual) {
-          // 手札消費前には存在していたはずなので、簡易的にテキストで判定
-          // 本来はカードオブジェクトを渡すべきだが、既存ロジックとの兼ね合いでこれで判定
-          // (消費済みなので currentHand ではなく submit前の状態を知る必要があるが、
-          //  ここでは「レアリティが高いテキストならボーナス」という簡易判定にする)
-          // 厳密にするなら submitAnswer(cardObject) に変える必要がある。
-      }
+      } catch(e) { score = 40 + Math.floor(Math.random()*40); comment = "評価エラー(Fallback)"; radar = {linguistic:2,cognitive:2,emotional:2,focus:2}; distance = 0.5; }
 
       setAiComment(formatAiComment(comment));
       if (radar) { updateUserStats(score, radar); setGameRadars(prev => [...prev, radar]); }
@@ -1178,44 +893,29 @@ export default function AiOgiriApp() {
   const handleSingleSubmitManual = async (text) => { submitAnswer(text, true); };
   const handleTopicFeedback = (isGood) => { playSound('tap'); setTopicFeedback(isGood ? 'good' : 'bad'); if (isGood && currentTopic) saveLearnedTopic(currentTopic); };
   const handleAiFeedback = (isGood) => { playSound('tap'); setAiFeedback(isGood ? 'good' : 'bad'); if (isGood && selectedSubmission?.answerText) saveLearnedAnswer(selectedSubmission.answerText); saveAiCommentFeedback(aiComment, isGood); };
-  const confirmTopic = () => { playSound('decision'); setCurrentTopic(manualTopicInput); if (gameConfig.mode === 'single') { setGamePhase('answer_input'); setTimeLeft(timeLimit); if(gameConfig.singleMode!=='freestyle') setIsTimerRunning(true); } else { setGamePhase('turn_change'); setTurnPlayerIndex((masterIndex + 1) % players.length); } };
+  const handleBackToTitle = () => { if (window.confirm('タイトル画面に戻りますか？')) { playSound('tap'); setIsTimerRunning(false); setAppMode('title'); } };
+  const handleLogin = async () => { const provider = new GoogleAuthProvider(); try { await signInWithPopup(auth, provider); playSound('decision'); } catch (error) { console.error("Login failed", error); alert("ログインに失敗しました。"); } };
+  const handleLogout = async () => { if(window.confirm('ログアウトしますか？')) { try { await signOut(auth); playSound('tap'); } catch (error) { console.error("Logout failed", error); } } };
+  const saveUserName = (name) => { setUserName(name); localStorage.setItem('aiOgiriUserName', name); };
+  const saveVolume = (v) => { setVolume(v); localStorage.setItem('aiOgiriVolume', v); };
+  const saveTimeLimit = (t) => { setTimeLimit(t); localStorage.setItem('aiOgiriTimeLimit', t); };
+  const saveLearnedTopic = async (newTopic) => { if (newTopic.includes('{placeholder}')) return; const newLocalData = { ...learned, topics: [...learned.topics, newTopic] }; setLearned(newLocalData); localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData)); };
+  const saveLearnedAnswer = async (newAnswer) => { const newLocalData = { ...learned, goodAnswers: [...learned.goodAnswers, newAnswer] }; setLearned(newLocalData); localStorage.setItem('aiOgiriLearnedData', JSON.stringify(newLocalData)); };
+  const updateUserStats = (score, radar) => { setUserStats(prev => { const newCount = (prev.playCount || 0) + 1; const newMax = Math.max(prev.maxScore || 0, score); const prevRadar = prev.totalRadar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 }; const r = radar || { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 }; const newRadar = { linguistic: (prevRadar.linguistic || 0) + (r.linguistic || 0), cognitive: (prevRadar.cognitive || 0) + (r.cognitive || 0), emotional: (prevRadar.emotional || 0) + (r.emotional || 0), focus: (prevRadar.focus || 0) + (r.focus || 0), novelty: (prevRadar.novelty || 0) + (r.novelty || 0), }; const newData = { playCount: newCount, maxScore: newMax, totalRadar: newRadar }; localStorage.setItem('aiOgiriUserStats', JSON.stringify(newData)); if (currentUser && !currentUser.isAnonymous) { const ref = getUserDocRef(currentUser.uid, 'stats'); if (ref) setDoc(ref, newData).catch(console.error); } return newData; }); };
+  const saveToHallOfFame = async (entry) => { const newHall = [...hallOfFame, entry].sort((a, b) => b.score - a.score).slice(0, 3); setHallOfFame(newHall); localStorage.setItem('aiOgiriHallOfFame', JSON.stringify(newHall)); if (currentUser && !currentUser.isAnonymous) { const ref = getUserDocRef(currentUser.uid, 'hall_of_fame'); if (ref) await setDoc(ref, { entries: newHall }).catch(console.error); } };
+  const checkAndSaveGlobalRank = async (entry) => { if (!db) return; const rankRef = getDocRef('shared_db', 'global_ranking'); try { await runTransaction(db, async (transaction) => { const sfDoc = await transaction.get(rankRef); let ranks = []; if (sfDoc.exists()) { ranks = sfDoc.data().score_attack || []; } ranks.push(entry); ranks.sort((a, b) => b.score - a.score); const top10 = ranks.slice(0, 10); if (JSON.stringify(ranks) !== JSON.stringify(top10) || ranks.length <= 10) { transaction.set(rankRef, { score_attack: top10 }, { merge: true }); } }); } catch (e) { console.error("Global ranking update failed: ", e); } };
+  const resetLearnedData = () => { if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) { localStorage.removeItem('aiOgiriLearnedData'); setLearned({ topics: [], answers: [], pool: [] }); setTopicsList([...FALLBACK_TOPICS]); playSound('timeup'); alert("リセットしました。"); } };
+  const updateRanking = async (modeName, value) => { setRankings(prev => { const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); const top3 = newList.slice(0, 3); const newRankings = { ...rankings, [modeName]: top3 }; localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings)); return newRankings; }); };
+  const getFinalGameRadar = () => { if (gameRadars.length === 0) return { novelty: 3, clarity: 3, relevance: 3, intelligence: 3, empathy: 3 }; const sum = gameRadars.reduce((acc, curr) => ({ novelty: acc.novelty + (curr.novelty || 0), clarity: acc.clarity + (curr.clarity || 0), relevance: acc.relevance + (curr.relevance || 0), intelligence: acc.intelligence + (curr.intelligence || 0), empathy: acc.empathy + (curr.empathy || 0), }), { novelty: 0, clarity: 0, relevance: 0, intelligence: 0, empathy: 0 }); const count = gameRadars.length; return { novelty: sum.novelty / count, clarity: sum.clarity / count, relevance: sum.relevance / count, intelligence: sum.intelligence / count, empathy: sum.empathy / count, }; };
   const handleTimeUp = () => { playSound('timeup'); const card = singlePlayerHand[0] || "時間切れ"; const cardText = typeof card === 'string' ? card : card.text; submitAnswer(cardText); };
   const prepareNextSubmitter = (current, master, currentPlayers) => { const next = (current + 1) % currentPlayers.length; if (next === master) { setGamePhase('turn_change'); setTurnPlayerIndex(master); } else { setTurnPlayerIndex(next); setGamePhase('turn_change'); } };
 
-  // Effects
-  useEffect(() => {
-    const localRankings = localStorage.getItem('aiOgiriRankings'); if (localRankings) setRankings(JSON.parse(localRankings));
-    const localLearned = localStorage.getItem('aiOgiriLearnedData'); 
-    if (localLearned) { const parsed = JSON.parse(localLearned); setLearned(parsed); if (parsed.topics) setTopicsList(prev => [...prev, ...parsed.topics]); }
-    const savedName = localStorage.getItem('aiOgiriUserName'); if (savedName) setUserName(savedName);
-    const localHall = localStorage.getItem('aiOgiriHallOfFame'); if (localHall) setHallOfFame(JSON.parse(localHall));
-    const savedStats = localStorage.getItem('aiOgiriUserStats'); if (savedStats) setUserStats(JSON.parse(savedStats));
-    const savedVolume = localStorage.getItem('aiOgiriVolume'); if (savedVolume) setVolume(parseFloat(savedVolume));
-    const savedTime = localStorage.getItem('aiOgiriTimeLimit'); if (savedTime) setTimeLimit(parseInt(savedTime));
-    
-    if (auth) { 
-        const unsub = onAuthStateChanged(auth, async (u) => {
-            setCurrentUser(u);
-            if (u && !u.isAnonymous) {
-                try {
-                    const statsRef = getUserDocRef(u.uid, 'stats');
-                    if (statsRef) { const snap = await getDoc(statsRef); if (snap.exists()) setUserStats(snap.data()); }
-                    const hallRef = getUserDocRef(u.uid, 'hall_of_fame');
-                    if (hallRef) { const snap = await getDoc(hallRef); if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }
-                } catch (e) { console.error("Data sync error:", e); }
-            }
-        });
-        if (!auth.currentUser) signInAnonymously(auth).catch(()=>{});
-        return () => unsub();
-    }
-  }, []);
-  
-  useEffect(() => { if (!db) return; const rankRef = getDocRef('shared_db', 'global_ranking'); if (rankRef) { const unsub = onSnapshot(rankRef, (doc) => { if (doc.exists()) { setGlobalRankings(doc.data().score_attack || []); } }); return () => unsub(); } }, []);
   useEffect(() => { let t; if (isTimerRunning && timeLeft > 0) t = setInterval(() => setTimeLeft(p => p - 1), 1000); else if (isTimerRunning && timeLeft === 0) { setIsTimerRunning(false); handleTimeUp(); } return () => clearInterval(t); }, [isTimerRunning, timeLeft]);
   useEffect(() => { let t; if (appMode === 'game' && gameConfig.singleMode === 'time_attack' && startTime && !finishTime) { t = setInterval(() => setDisplayTime(formatTime(Date.now() - startTime)), 100); } return () => clearInterval(t); }, [appMode, startTime, finishTime]);
   useEffect(() => { if (!isAiActive || appMode !== 'game') return; if (cardDeck.length >= HAND_SIZE * 2) return; const now = Date.now(); if (now - lastCardFetchRef.current < 5000) return; lastCardFetchRef.current = now; fetchAiCards(HAND_SIZE).then(addCardsToDeck); }, [appMode, cardDeck.length, isAiActive]);
 
   // ★ プリフェッチの開始 (AI有効時)
+  // Ref修正: 依存関係によるStale Closureを防ぐためRefを使用
   useEffect(() => {
      if (isAiActive && gamePhase !== 'drawing') {
          fillTopicQueue();
@@ -1440,7 +1140,8 @@ export default function AiOgiriApp() {
                            <h3 className="text-3xl font-black text-slate-800 mb-2">終了！</h3>
                         </div>
                         <div className="text-6xl font-black text-indigo-600 mb-8">
-                             {gameConfig.mode === 'multi' ? `優勝: ${players.sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}${gameConfig.singleMode === 'time_attack' ? '点' : '点'}`}
+                             {/* 修正: sortによるMutationを防ぐため [...players] でコピーを作成 */}
+                             {gameConfig.mode === 'multi' ? `優勝: ${[...players].sort((a,b)=>b.score-a.score)[0].name}` : `${players[0].score}${gameConfig.singleMode === 'time_attack' ? '点' : '点'}`}
                              {gameConfig.singleMode === 'time_attack' && <div className="text-lg mt-2 font-bold">回答数: {answerCount}回</div>}
                         </div>
                         {gameConfig.mode === 'single' && (
