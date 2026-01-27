@@ -7,20 +7,21 @@ import {
   Share2, Copy, Check, AlertTriangle, BookOpen, X, Clock, Skull, Zap, Crown, 
   Infinity, Trash2, Brain, Hash, Star, Settings, History, Info, Volume2, 
   VolumeX, PieChart, Activity, LogOut, Flame, Smile, GraduationCap, Microscope,
-  LogIn, Globe, Bot 
+  LogIn, Globe, Bot, Lightbulb, Search, Loader2
 } from 'lucide-react';
 import { initializeApp, getApps, getApp } from "firebase/app";
 import { getFirestore, collection, doc, setDoc, getDoc, onSnapshot, updateDoc, arrayUnion, runTransaction } from "firebase/firestore";
 import { getAuth, signInAnonymously, onAuthStateChanged, GoogleAuthProvider, signInWithPopup, signOut } from "firebase/auth";
 
 // --- 設定・定数 ---
-const APP_VERSION = "Ver 0.1.03 (Order Fix)";
+const APP_VERSION = "Ver 0.1.05 (UX Improve)";
 const API_BASE_URL = "https://ai-ogiri-app.onrender.com/api"; 
 
 const UPDATE_LOGS = [
+  { version: "Ver 0.1.05", date: "2026/01/27", content: ["ロード画面の演出を強化", "レーダーチャートの表示崩れを修正"] },
+  { version: "Ver 0.1.04", date: "2026/01/27", content: ["通信タイムアウト設定を延長", "エラーハンドリングの強化"] },
   { version: "Ver 0.1.03", date: "2026/01/27", content: ["関数定義順序を修正しReferenceErrorを解消"] },
   { version: "Ver 0.1.02", date: "2026/01/27", content: ["結果画面でのState直接変更バグを修正", "未使用コンポーネントの統合", "ランキング表示の改善"] },
-  { version: "Ver 0.1.00", date: "2026/01/27", content: ["メジャーアップデート", "APIリクエストの型厳格化"] },
 ];
 
 const TOTAL_ROUNDS = 5;
@@ -34,7 +35,7 @@ const HAND_SIZE = 8;
 const INITIAL_DECK_SIZE = 60; 
 const RADAR_MAX_PER_ANSWER = 5;
 const MAX_REROLL = 3;
-const API_TIMEOUT_MS = 60000;
+const API_TIMEOUT_MS = 90000;
 
 const JOKER_CARD = { text: "🤖 AIのボケ", rarity: "epic" };
 
@@ -190,26 +191,62 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
   );
 };
 
+// 修正: SVGが見切れないようにパディングとViewBoxを調整
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
-  const r = size / 2, c = size / 2, max = maxValue;
+  const padding = 40; // ラベル用の余白
+  const viewSize = size + padding * 2; // SVGの描画領域全体
+  const c = viewSize / 2; // 中心座標
+  const r = size / 2; // チャート自体の半径
+  
   const labels = ["言語的", "認知的", "情動的", "視点", "新規性"]; 
   const keys = ["linguistic", "cognitive", "emotional", "focus", "novelty"];
+  
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
-    const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
-    const radius = ratio * r * 0.90; 
-    return { x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) };
+    const ratio = maxValue <= 0 ? 0 : 0.2 + (val / maxValue) * 0.8;
+    const radius = ratio * r; 
+    return { 
+      x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), 
+      y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) 
+    };
   };
+  
   const safeData = data || {};
   const points = keys.map((k, i) => getP(safeData[k], i)).map(p => `${p.x},${p.y}`).join(" ");
   const bgLevels = [5, 4, 3, 2, 1];
+  
   return (
-    <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
-      <svg width={size} height={size} className="overflow-visible">
-        {bgLevels.map(l => ( <polygon key={l} points={keys.map((_, i) => { const radius = (l / 5) * r * 0.90; return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2)); }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" /> ))}
-        {keys.map((_, i) => { const radius = r * 0.90; const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; })}
+    <div className="relative flex justify-center items-center" style={{ width: '100%', maxWidth: viewSize, margin: '0 auto' }}>
+      <svg width="100%" height="100%" viewBox={`0 0 ${viewSize} ${viewSize}`} className="overflow-visible">
+        {/* 背景の五角形 */}
+        {bgLevels.map(l => ( 
+          <polygon key={l} 
+            points={keys.map((_, i) => { 
+              const radius = (l / 5) * r; 
+              return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2)); 
+            }).join(" ")} 
+            fill="none" stroke="#e2e8f0" strokeWidth="1" 
+          /> 
+        ))}
+        {/* 軸線 */}
+        {keys.map((_, i) => { 
+          const x = c + r * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); 
+          const y = c + r * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); 
+          return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; 
+        })}
+        {/* データポリゴン */}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {keys.map((_, i) => { const radius = r * 0.90 * 1.35; const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); return ( <text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text> ); })}
+        {/* ラベル */}
+        {keys.map((_, i) => { 
+          const radius = r + 20; // 半径より少し外側
+          const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); 
+          const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); 
+          return ( 
+            <text key={i} x={x} y={y} fontSize="11" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">
+              {labels[i]}
+            </text> 
+          ); 
+        })}
       </svg>
     </div>
   );
@@ -258,7 +295,7 @@ const MyDataModal = ({ stats, onClose, userName }) => {
     <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
         <p className="text-sm text-center text-slate-500 font-bold mb-4">{userName} さんの戦績</p>
         <div className="grid grid-cols-2 gap-3"><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">通算回答数</p><p className="text-2xl font-black text-slate-700">{stats.playCount || 0}回</p></div><div className="bg-slate-50 p-4 rounded-xl text-center"><p className="text-xs text-slate-400 font-bold mb-1">最高スコア</p><p className="text-2xl font-black text-yellow-500">{stats.maxScore || 0}点</p></div></div>
-        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-16 mt-8"><p className="text-sm font-bold text-indigo-800 mb-6 flex items-center gap-2"><PieChart className="w-4 h-4"/> 芸風分析</p><RadarChart data={avgData} size={200} maxValue={5} /><div className="mt-8 bg-white p-3 rounded-xl w-full text-center shadow-sm"><p className="text-xs text-slate-400 mb-1">あなたのタイプ</p><p className="text-lg font-black text-indigo-600">{typeDiagnosis}</p></div></div>
+        <div className="bg-indigo-50 p-6 rounded-2xl flex flex-col items-center pt-16 mt-8"><p className="text-sm font-bold text-indigo-800 mb-6 flex items-center gap-2"><PieChart className="w-4 h-4"/> 芸風分析</p><RadarChart data={avgData} size={150} maxValue={5} /><div className="mt-8 bg-white p-3 rounded-xl w-full text-center shadow-sm"><p className="text-xs text-slate-400 mb-1">あなたのタイプ</p><p className="text-lg font-black text-indigo-600">{typeDiagnosis}</p></div></div>
     </ModalBase>
   );
 };
@@ -287,6 +324,44 @@ const HallOfFameModal = ({ onClose, data, globalRankings, activeTab, setActiveTa
             )}
         </div>
     </ModalBase>
+  );
+};
+
+// 新規: ロード画面用コンポーネント
+const LoadingView = () => {
+  const loadingMessages = [
+    "AIが面白いボケを考え中...",
+    "座布団を運んでいます...",
+    "審査員が眼鏡を拭いています...",
+    "ネタ帳をめくっています...",
+    "お茶を淹れています...",
+    "会場を温めています...",
+    "スベらないか心配しています...",
+    "大喜利の神様に祈っています...",
+    "笑いのツボを探しています..."
+  ];
+  const [msgIndex, setMsgIndex] = useState(0);
+  
+  useEffect(() => {
+    const t = setInterval(() => {
+      setMsgIndex(prev => (prev + 1) % loadingMessages.length);
+    }, 2500); // 2.5秒ごとに切り替え
+    return () => clearInterval(t);
+  }, []);
+
+  return (
+    <div className="text-center py-20 animate-in fade-in">
+        <div className="relative w-20 h-20 mx-auto mb-6">
+            <RefreshCw className="w-full h-full text-indigo-200 animate-spin absolute top-0 left-0" style={{animationDuration: '3s'}} />
+            <div className="absolute inset-0 flex items-center justify-center">
+                <Brain className="w-8 h-8 text-indigo-600 animate-pulse" />
+            </div>
+        </div>
+        <p className="text-lg font-bold text-slate-700 mb-2">準備中...</p>
+        <p className="text-sm text-slate-500 h-6 transition-all duration-500">
+            {loadingMessages[msgIndex]}
+        </p>
+    </div>
   );
 };
 
@@ -444,6 +519,11 @@ export default function AiOgiriApp() {
         });
         if (!res.ok) throw new Error(`Server error: ${res.status}`);
         return await res.json();
+      } catch (error) {
+          if (error.name === 'AbortError') {
+              throw new Error('Request timed out');
+          }
+          throw error;
       } finally {
         clearTimeout(timeoutId);
       }
@@ -993,11 +1073,8 @@ export default function AiOgiriApp() {
                 </div>
 
                 {gamePhase === 'drawing' && (
-                    <div className="text-center py-20">
-                        <RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300 mb-4"/>
-                        <p className="text-slate-500 font-bold">準備中...</p>
-                        <p className="text-xs text-slate-400 mt-2">AIがカードを生成しています...</p>
-                    </div>
+                    // 修正: ロード画面をLoadingViewコンポーネントに差し替え
+                    <LoadingView />
                 )}
 
                 {gamePhase === 'master_topic' && (
@@ -1160,7 +1237,8 @@ export default function AiOgiriApp() {
                              {gameRadars.length > 0 && (
                                 <div className="mb-8 flex justify-center flex-col items-center mt-10">
                                     <p className="text-sm font-bold text-slate-500 mb-6">今回の平均評価</p>
-                                    <RadarChart data={getFinalGameRadar()} size={180} maxValue={5} />
+                                    {/* 修正: サイズ調整して見切れないようにする */}
+                                    <RadarChart data={getFinalGameRadar()} size={150} maxValue={5} />
                                 </div>
                              )}
                            </>
