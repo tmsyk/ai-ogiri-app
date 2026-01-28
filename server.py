@@ -36,49 +36,45 @@ try:
 except Exception as e:
     print(f"Initialization error: {e}")
 
-# --- スコア計算ロジック（4次元モデル対応版） ---
+# --- スコア計算ロジック（甘口調整版） ---
 def calculate_overall_score(radar):
     """
-    4次元モデル + 新規性 に基づく総合点計算
+    4次元モデルに基づく総合点計算。
+    AIが「3」をつけた場合に60-70点が出るように調整。
     """
-    # 新しいキーで取得（なければ1をデフォルトにして極端な0点を防ぐ）
-    linguistic = radar.get('linguistic', 1) # 言語的
-    cognitive = radar.get('cognitive', 1)   # 認知的
-    emotional = radar.get('emotional', 1)   # 情動的
-    focus = radar.get('focus', 1)           # 視点
-    novelty = radar.get('novelty', 1)       # 新規性
+    # 各項目を取得（なければ2をデフォルトにして極端な0点を防ぐ）
+    linguistic = radar.get('linguistic', 2)
+    cognitive = radar.get('cognitive', 2)
+    emotional = radar.get('emotional', 2)
+    focus = radar.get('focus', 2)
+    novelty = radar.get('novelty', 2)
 
-    # 1. 基礎点 (Base Validity): 認知的距離が適切か？
-    # 認知(cognitive)が極端に低い(1以下)と「意味不明」として減点
-    base_factor = 1.0
-    if cognitive < 2:
-        base_factor = 0.5 
+    # 1. 突出度 (Peak): 最も高い要素を評価
+    max_val = max(linguistic, cognitive, emotional, focus, novelty)
+    
+    # 2. 平均点 (Average)
+    avg_val = (linguistic + cognitive + emotional + focus + novelty) / 5.0
 
-    # 2. 爆発力 (Impact): 突出した要素があるか？
-    # 言語、情動、視点、新規性の中で最も高い数値を評価
-    max_impact = max(linguistic, emotional, focus, novelty)
+    # 3. 基礎スコア計算
+    # 最大値を重視しつつ、平均値で底上げ
+    # 例: 全部3なら power = 3.0。 全部2なら power = 2.0。
+    # 1点につき約15-20点の価値を持たせる
+    power = (max_val * 0.6) + (avg_val * 0.4)
     
-    # 平均点も加味（バランスよく高い場合も評価）
-    avg_score = (linguistic + cognitive + emotional + focus + novelty) / 5.0
-    
-    # パワー算出: 最大値重視だが平均も少し見る
-    power = (max_impact * 0.7) + (avg_score * 0.3)
+    # 4. 100点満点換算
+    # power=3.0 -> 60点 + 基礎10点 = 70点
+    # power=5.0 -> 100点 + 基礎10点 = 110点 -> 100点
+    raw_score = (power * 20) + 10
 
-    # 3. 総合計算
-    # 5点満点 -> 100点満点換算 (x20)
-    raw_score = power * 20 * base_factor
-    
-    # ボーナス加点
+    # 5. コンボボーナス（尖った回答への報酬）
     bonus = 0
-    # 「インテリジェンス（言語的）」かつ「シュール（視点・新規性）」などのコンボ
-    if linguistic >= 4 and (focus >= 4 or novelty >= 4):
-        bonus += 5
-    # 「共感（情動的）」が高い
-    if emotional >= 4:
-        bonus += 5
+    if novelty >= 4: bonus += 5
+    if linguistic >= 4: bonus += 5
+    if emotional >= 4: bonus += 5
 
     final_score = int(raw_score + bonus)
-    # 最低10点、最高100点
+    
+    # 範囲制限
     return min(100, max(10, final_score))
 
 # --- Watashihaモデル用関数 ---
@@ -104,7 +100,7 @@ def generate_by_watashiha(prompt_text):
         "inputs": formatted_prompt,
         "parameters": {
             "max_new_tokens": 64, 
-            "temperature": 0.8,
+            "temperature": 0.85,
             "top_p": 0.9,
             "top_k": 50,
             "return_full_text": False
@@ -154,7 +150,7 @@ def get_distance_multiplier(similarity):
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server (Fixed Scoring)"}
+    return {"status": "ok", "message": "AI Ogiri Server (Score Adjustment)"}
 
 @app.post("/api/watashiha")
 def generate_joke(req: WatashihaRequest):
@@ -240,27 +236,33 @@ def judge_answer(req: JudgeRequest):
         logs = "\n".join(req.feedback_logs[:5])
         feedback_text = f"[ユーザーの好み]\n{logs}"
 
-    # ★重要: レーダーチャートのキー名をここで統一
+    # 評価基準を少し甘めに指示
+    radar_desc = """
+    以下の4つの次元(0-5点)で評価してください。面白ければ積極的に4点以上をつけてください。
+    1. linguistic (言語的距離): 言葉の硬度と格式。
+    2. cognitive (認知的距離): カテゴリーの飛躍。
+    3. emotional (情動的距離): 聖と俗のギャップ。
+    4. focus (視点・解像度): 具体と抽象のズレ。
+    5. novelty (新規性): アイデアの斬新さ。
+    """
+
     prompt = f"""
     {personality_prompt}
     {feedback_text}
 
-    以下のお題と回答（名詞）を、「面白さの4次元評価モデル」に基づいて審査してください。
+    以下のお題と回答（名詞）を審査してください。
 
     [お題]: {req.topic}
     [回答]: {req.answer}
     [参考]: 類似度 {similarity:.4f} ({distance_eval})
 
-    # 評価基準 (0-5点)
-    1. linguistic (言語的距離): 言葉の硬さ・格式のギャップ。
-    2. cognitive (認知的距離): カテゴリーの飛躍。
-    3. emotional (情動的距離): 聖俗のギャップ。
-    4. focus (視点): 具体と抽象のズレ。
-    5. novelty (新規性): アイデアの斬新さ。
-
-    # 名詞アンカー理論
-    認知（意味）がつながっているのに、言語（硬さ）や情動（聖俗）が真逆である回答を高評価としてください。
-
+    # 評価基準
+    {radar_desc}
+    
+    # 指示
+    - 全体的に少し甘めの採点（60点基準）でお願いします。
+    - どれか一つの項目でも突出していれば高評価にしてください。
+    
     出力JSON: {{
         "comment": "15文字程度の鋭いツッコミ",
         "reasoning": "解説",
@@ -277,15 +279,15 @@ def judge_answer(req: JudgeRequest):
         )
         result = json.loads(response.text)
         
-        # 補正適用
         radar = result.get("radar", {})
-        for k in radar:
-            if k == "cognitive":
-                radar[k] = max(0, min(5, round(radar[k] * multiplier)))
-            else:
-                radar[k] = max(0, min(5, radar[k]))
+        # 欠損項目の補完
+        for key in ["linguistic", "cognitive", "emotional", "focus", "novelty"]:
+            if key not in radar: radar[key] = 2
+            
+        # 認知的距離の補正
+        radar["cognitive"] = max(0, min(5, round(radar["cognitive"] * multiplier)))
         
-        # ★修正: 新しいロジックでスコア計算
+        # スコア計算
         final_score = calculate_overall_score(radar)
         
         return {
@@ -302,12 +304,11 @@ def judge_answer(req: JudgeRequest):
     except Exception as e:
         print(f"Judge Error: {e}")
         return {
-            "score": 40, # エラー時でも最低点は与える
+            "score": 50, 
             "comment": "採点不能...",
             "reasoning": "通信エラーが発生しました。",
             "distance": similarity,
             "ai_example": ai_example,
-            # フォールバック用データもキー名を統一
             "radar": {"linguistic":2,"cognitive":2,"emotional":2,"focus":2,"novelty":2}
         }
 
