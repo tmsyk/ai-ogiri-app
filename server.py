@@ -77,15 +77,18 @@ def calculate_overall_score(radar):
     # 範囲制限
     return min(100, max(10, final_score))
 
-# --- Watashihaモデル用関数 ---
+# --- Watashihaモデル用関数 (Gemini代打付き) ---
 def generate_by_watashiha(prompt_text):
-    if not HF_API_KEY:
-        return None
-    
-    API_URL = "https://api-inference.huggingface.co/models/watashiha/Watashiha-Llama-2-13B-Ogiri-sft"
-    headers = {"Authorization": f"Bearer {HF_API_KEY}"}
-    
-    formatted_prompt = f"""
+    """
+    Hugging Faceのモデルでボケを生成する。
+    失敗時やタイムアウト時はGeminiが代打を行う。
+    """
+    # 1. まずWatashihaモデル (Hugging Face) を試す
+    if HF_API_KEY:
+        API_URL = "https://api-inference.huggingface.co/models/watashiha/Watashiha-Llama-2-13B-Ogiri-sft"
+        headers = {"Authorization": f"Bearer {HF_API_KEY}"}
+        
+        formatted_prompt = f"""
 以下は、タスクを説明する指示と、文脈のある入力の組み合わせです。要求を適切に満たす応答を書きなさい。
 
 ### 指示:
@@ -96,25 +99,39 @@ def generate_by_watashiha(prompt_text):
 
 ### 応答:
 """
-    payload = {
-        "inputs": formatted_prompt,
-        "parameters": {
-            "max_new_tokens": 64, 
-            "temperature": 0.85,
-            "top_p": 0.9,
-            "top_k": 50,
-            "return_full_text": False
+        payload = {
+            "inputs": formatted_prompt,
+            "parameters": {
+                "max_new_tokens": 64, 
+                "temperature": 0.85,
+                "top_p": 0.9,
+                "top_k": 50,
+                "return_full_text": False
+            }
         }
-    }
+        
+        try:
+            # 無料APIは遅いことがあるのでタイムアウトを短めに設定してGeminiへ回す
+            response = requests.post(API_URL, headers=headers, json=payload, timeout=5)
+            output = response.json()
+            
+            # エラーチェック
+            if isinstance(output, list) and len(output) > 0 and "generated_text" in output[0]:
+                text = output[0]["generated_text"].strip()
+                if text:
+                    return text
+        except Exception:
+            pass # エラーやタイムアウト時はスルーしてGeminiへ
+
+    # 2. 失敗したらGeminiが代打
     try:
-        response = requests.post(API_URL, headers=headers, json=payload, timeout=8)
-        output = response.json()
-        if isinstance(output, list) and len(output) > 0 and "generated_text" in output[0]:
-            text = output[0]["generated_text"].strip()
-            return text if text else None
-        return None
+        fallback_prompt = f"大喜利のお題「{prompt_text}」に対して、シュールで面白いボケ回答を1つだけ出力してください。解説不要。回答のみ。"
+        res = client.models.generate_content(model=GEN_MODEL_NAME, contents=fallback_prompt)
+        text = res.text.strip()
+        # 代打であることを明記
+        return f"{text} (Gemini代打)"
     except Exception:
-        return None
+        return "（思いつきませんでした...）"
 
 # --- リクエスト型定義 ---
 class TopicRequest(BaseModel):
@@ -150,18 +167,13 @@ def get_distance_multiplier(similarity):
 
 @app.get("/")
 def read_root():
-    return {"status": "ok", "message": "AI Ogiri Server (Score Adjustment)"}
+    return {"status": "ok", "message": "AI Ogiri Server (Ver 0.87 Gemini Fallback)"}
 
 @app.post("/api/watashiha")
 def generate_joke(req: WatashihaRequest):
+    # 関数内でフォールバック処理を行うためシンプルに呼び出すだけ
     answer = generate_by_watashiha(req.topic)
-    if answer: return {"answer": answer}
-    else:
-        try:
-            prompt = f"大喜利のお題「{req.topic}」に対して、人間味のあるボケ回答を1つ出力してください。回答のみ。"
-            res = client.models.generate_content(model=GEN_MODEL_NAME, contents=prompt)
-            return {"answer": res.text.strip() + " (Gemini代打)"}
-        except: return {"answer": "（思いつかなかった...）"}
+    return {"answer": answer}
 
 @app.post("/api/topic")
 def generate_topic(req: TopicRequest):
@@ -198,8 +210,8 @@ def judge_answer(req: JudgeRequest):
     distance_eval = "Unknown"
     multiplier = 1.0
     
+    # 1. Watashihaモデルによる回答例の生成（採点と並行して行う）
     ai_example = generate_by_watashiha(req.topic)
-    if not ai_example: ai_example = "（考え中...）"
 
     try:
         result_topic = client.models.embed_content(
