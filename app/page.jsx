@@ -131,6 +131,11 @@ const normalizeRadarData = (radar) => {
 const calculateScoreClientSide = (radar) => {
   const r = normalizeRadarData(radar);
 
+  // シュール・レスキュー（勢いがあるなら論理性は無視）
+  if (r.emotional >= 4 && r.cognitive <= 2) {
+    r.cognitive = 3; // 補正
+  }
+
   const maxImpact = Math.max(r.linguistic, r.emotional, r.focus, r.novelty);
   const avgScore = (r.linguistic + r.cognitive + r.emotional + r.focus + r.novelty) / 5.0;
 
@@ -142,6 +147,16 @@ const calculateScoreClientSide = (radar) => {
   if (r.novelty >= 4) bonus += 5;
   if (r.linguistic >= 4) bonus += 5;
   if (r.emotional >= 4) bonus += 5;
+
+  // シナジーボーナス（文脈×新規性）
+  if (r.novelty >= 3 && r.cognitive >= 3) {
+    bonus += 5;
+  }
+
+  // シュールボーナス（勢い×非論理の救済）
+  if (r.emotional >= 4 && r.cognitive <= 2) {
+    bonus += 5;
+  }
 
   return Math.min(100, Math.max(10, Math.floor(rawScore + bonus)));
 };
@@ -250,7 +265,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const getP = (v, i) => {
     const val = Math.max(0, v || 0);
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
-    const radius = ratio * r * 0.90;
+    const radius = ratio * r * 0.75;
     return { x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) };
   };
   const points = keys.map((k, i) => getP(safeData[k], i)).map(p => `${p.x},${p.y}`).join(" ");
@@ -612,7 +627,7 @@ export default function AiOgiriApp() {
         t = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
       }
 
-      if (t && !t.includes("エラー") && !t.includes("Error") && !topicQueueRef.current.includes(t)) {
+      if (t && !t.includes("エラー") && !t.includes("Error") && !topicQueueRef.current.includes(t) && t !== currentTopic) {
         topicQueueRef.current.push(t);
       }
     } catch (e) { console.warn("Prefetch fail", e); }
