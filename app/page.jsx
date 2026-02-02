@@ -351,8 +351,14 @@ const InfoModal = ({ onClose, type }) => (
 );
 
 // --- メインアプリ ---
+const formatAiComment = (comment) => {
+  if (!comment) return '';
+  return comment.replace(/^["「]/, '').replace(/["」]$/, '');
+};
+
 export default function AiOgiriApp() {
   const [appMode, setAppMode] = useState('title');
+  const [loadingMessage, setLoadingMessage] = useState('準備中...');
   // マルチプレイ設定（スコア制かラウンド制か、終了値）を追加
   const [gameConfig, setGameConfig] = useState({
     mode: 'single', singleMode: 'score_attack', playerCount: 3,
@@ -433,6 +439,18 @@ export default function AiOgiriApp() {
       playOscillatorSound(ctx, type, volume);
     }
   };
+
+  useEffect(() => {
+    if (gamePhase === 'drawing') {
+      const messages = ['AIがカードを生成しています...', 'お題を考えています...', '審判の準備をしています...', 'もう少しお待ちください...'];
+      let i = 0;
+      const interval = setInterval(() => {
+        setLoadingMessage(messages[i % messages.length]);
+        i++;
+      }, 2000);
+      return () => clearInterval(interval);
+    }
+  }, [gamePhase]);
 
   const handleBackToTitle = () => {
     if (window.confirm('タイトル画面に戻りますか？')) {
@@ -865,7 +883,7 @@ export default function AiOgiriApp() {
             {gamePhase === 'drawing' && (
               <div className="text-center py-20">
                 <RefreshCw className="w-10 h-10 animate-spin mx-auto text-slate-300 mb-4" />
-                <p className="text-slate-500 font-bold">準備中...</p>
+                <p className="text-slate-500 font-bold">{loadingMessage}</p>
                 <p className="text-xs text-slate-400 mt-2">AIがカードを生成しています...</p>
               </div>
             )}
