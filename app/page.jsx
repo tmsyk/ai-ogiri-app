@@ -245,13 +245,10 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
       className={`relative p-3 rounded-xl transition-all duration-200 border-2 shadow-sm flex items-center justify-center text-center h-24 w-full text-sm font-bold leading-snug break-words overflow-hidden active:scale-95
       ${isSelected ? 'bg-indigo-600 text-white border-indigo-400 transform scale-105 shadow-xl ring-2 ring-indigo-300' : 'bg-white hover:bg-slate-50 text-slate-800 border-slate-200'} 
       ${disabled ? 'opacity-60 cursor-not-allowed active:scale-100' : 'cursor-pointer hover:border-indigo-300 hover:shadow-md'}
-      ${isRare ? 'border-yellow-400 bg-yellow-50 hover:bg-yellow-100 ring-1 ring-yellow-200' : ''}
-      ${isEpic ? 'border-purple-400 bg-purple-50 hover:bg-purple-100 ring-1 ring-purple-200' : ''}
       `}
     >
-      {isRare && <span className="absolute top-1 right-1 text-[10px] text-yellow-600">★</span>}
-      {isEpic && <span className="absolute top-1 right-1 text-[10px] text-purple-600 flex items-center gap-1"><Bot className="w-3 h-3" /> AI</span>}
-      {isEpic ? <span className="text-purple-700 font-black">🤖 AIのボケ</span> : text}
+      {/* rarity表示を削除 */}
+      {text}
     </button>
   );
 };
@@ -263,7 +260,7 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   const safeData = normalizeRadarData(data);
 
   const getP = (v, i) => {
-    const val = Math.max(0, v || 0);
+    const val = Math.min(max, Math.max(0, v || 0)); // Clamp value to max
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.75;
     return { x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) };
@@ -319,7 +316,12 @@ const SettingsModal = ({ onClose, userName, setUserName, timeLimit, setTimeLimit
   </ModalBase>
 );
 const MyDataModal = ({ stats, onClose, userName }) => {
-  const avgData = { ...stats.totalRadar }; // 簡易化
+  const avgData = { ...stats.totalRadar };
+  if (stats.playCount > 0) {
+    Object.keys(avgData).forEach(key => {
+      avgData[key] = (avgData[key] || 0) / stats.playCount;
+    });
+  }
   const typeDiagnosis = analyzeType(avgData);
   return (
     <ModalBase onClose={onClose} title="マイデータ" icon={Activity}>
@@ -441,6 +443,7 @@ export default function AiOgiriApp() {
 
   const [activeModal, setActiveModal] = useState(null);
   const [hallTab, setHallTab] = useState('local');
+  const [sessionUsedTopics, setSessionUsedTopics] = useState(new Set()); // セッション済みお題
   const audioCtx = useRef(null);
 
   // --- Functions ---
@@ -468,6 +471,28 @@ export default function AiOgiriApp() {
       return () => clearInterval(interval);
     }
   }, [gamePhase]);
+
+  // Timer Effect
+  useEffect(() => {
+    let interval = null;
+    if (isTimerRunning && timeLeft > 0) {
+      interval = setInterval(() => {
+        setTimeLeft(prev => {
+          if (prev <= 1) {
+            clearInterval(interval);
+            setIsTimerRunning(false);
+            handleTimeUp();
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    } else if (timeLeft <= 0) {
+      if (interval) clearInterval(interval);
+      setIsTimerRunning(false);
+    }
+    return () => { if (interval) clearInterval(interval); };
+  }, [isTimerRunning, timeLeft]);
 
   const handleBackToTitle = () => {
     if (window.confirm('タイトル画面に戻りますか？')) {
@@ -627,7 +652,7 @@ export default function AiOgiriApp() {
         t = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
       }
 
-      if (t && !t.includes("エラー") && !t.includes("Error") && !topicQueueRef.current.includes(t) && t !== currentTopic) {
+      if (t && !t.includes("エラー") && !t.includes("Error") && !topicQueueRef.current.includes(t) && t !== currentTopic && !sessionUsedTopics.has(t)) {
         topicQueueRef.current.push(t);
       }
     } catch (e) { console.warn("Prefetch fail", e); }
@@ -648,7 +673,8 @@ export default function AiOgiriApp() {
       } catch (e) { t = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)]; }
     }
     if (auto) {
-      setCurrentTopic(t); setGamePhase('answer_input'); setTimeLeft(timeLimit);
+      setCurrentTopic(t); setSessionUsedTopics(prev => new Set(prev).add(t));
+      setGamePhase('answer_input'); setTimeLeft(timeLimit);
       if (gameConfig.singleMode !== 'freestyle') setIsTimerRunning(true);
     } else { setManualTopicInput(t); }
     setIsGeneratingTopic(false);
@@ -667,7 +693,7 @@ export default function AiOgiriApp() {
     playSound('decision'); setAppMode('game'); setGamePhase('drawing'); setCurrentRound(1); setAnswerCount(0);
     setIsSurvivalGameOver(false); setIsJudging(false); setIsAdvancingRound(false);
     setStartTime(null); setFinishTime(null); setGameRadars([]); setTotalZabuton(0);
-    topicQueueRef.current = [];
+    topicQueueRef.current = []; setSessionUsedTopics(new Set());
     if (gameConfig.singleMode === 'time_attack') setStartTime(Date.now());
     activeCardsRef.current = new Set();
     const targetDeckSize = Math.max(INITIAL_DECK_SIZE, HAND_SIZE * (gameConfig.mode === 'single' ? 2 : gameConfig.playerCount + 1) * 3);
