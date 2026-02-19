@@ -436,7 +436,7 @@ export default function AiOgiriApp() {
   const [hallOfFame, setHallOfFame] = useState([]);
   const [globalRankings, setGlobalRankings] = useState([]);
   const [rankings, setRankings] = useState({});
-  const [learned, setLearned] = useState({ topics: [], answers: [], pool: [] });
+  const [learned, setLearned] = useState({ topics: [], answers: [], pool: [], goodAnswers: [], cardPool: [] });
   const [topicsList, setTopicsList] = useState([...FALLBACK_TOPICS]);
   const usedCardsRef = useRef(new Set([...FALLBACK_ANSWERS]));
   const activeCardsRef = useRef(new Set());
@@ -459,6 +459,52 @@ export default function AiOgiriApp() {
       playOscillatorSound(ctx, type, volume);
     }
   };
+
+  // --- localStorage初期化 ---
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const savedName = localStorage.getItem('aiOgiriUserName');
+    if (savedName) setUserName(savedName);
+    const savedVolume = localStorage.getItem('aiOgiriVolume');
+    if (savedVolume) setVolume(parseFloat(savedVolume));
+    const savedTimeLimit = localStorage.getItem('aiOgiriTimeLimit');
+    if (savedTimeLimit) setTimeLimit(parseInt(savedTimeLimit));
+    const savedStats = localStorage.getItem('aiOgiriUserStats');
+    if (savedStats) { try { setUserStats(JSON.parse(savedStats)); } catch (e) { } }
+    const savedHall = localStorage.getItem('aiOgiriHallOfFame');
+    if (savedHall) { try { setHallOfFame(JSON.parse(savedHall)); } catch (e) { } }
+    const savedRankings = localStorage.getItem('aiOgiriRankings');
+    if (savedRankings) { try { setRankings(JSON.parse(savedRankings)); } catch (e) { } }
+    const savedLearned = localStorage.getItem('aiOgiriLearnedData');
+    if (savedLearned) { try { const data = JSON.parse(savedLearned); setLearned({ topics: data.topics || [], answers: data.answers || [], pool: data.pool || [], goodAnswers: data.goodAnswers || [], cardPool: data.cardPool || [] }); } catch (e) { } }
+  }, []);
+
+  // --- Firebase Auth リスナー ---
+  useEffect(() => {
+    if (!auth) return;
+    const unsubscribe = onAuthStateChanged(auth, (user) => {
+      setCurrentUser(user);
+      if (user && !user.isAnonymous) {
+        // ログイン時にFirestoreからデータを読み込む
+        const statsRef = getUserDocRef(user.uid, 'stats');
+        if (statsRef) getDoc(statsRef).then(snap => { if (snap.exists()) setUserStats(snap.data()); }).catch(console.error);
+        const hallRef = getUserDocRef(user.uid, 'hall_of_fame');
+        if (hallRef) getDoc(hallRef).then(snap => { if (snap.exists() && snap.data().entries) setHallOfFame(snap.data().entries); }).catch(console.error);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // --- グローバルランキング購読 ---
+  useEffect(() => {
+    if (!db) return;
+    const rankRef = getDocRef('shared_db', 'global_ranking');
+    if (!rankRef) return;
+    const unsubscribe = onSnapshot(rankRef, (snap) => {
+      if (snap.exists()) setGlobalRankings(snap.data().score_attack || []);
+    }, console.error);
+    return () => unsubscribe();
+  }, []);
 
   useEffect(() => {
     if (gamePhase === 'drawing') {
@@ -556,7 +602,11 @@ export default function AiOgiriApp() {
   const saveAiCommentFeedback = async (comment, isGood) => { if (!comment) return; const feedbackEntry = { comment, isGood, date: new Date().toISOString() }; const localFeedback = JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]'); const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 20); localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback)); if (currentUser && !currentUser.isAnonymous) { const ref = getUserDocRef(currentUser.uid, 'feedback'); if (ref) await setDoc(ref, { entries: nextFeedback }).catch(console.error); } };
   const resetLearnedData = () => { if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) { localStorage.removeItem('aiOgiriLearnedData'); setLearned({ topics: [], answers: [], pool: [] }); setTopicsList([...FALLBACK_TOPICS]); playSound('timeup'); alert("リセットしました。"); } };
   const updateRanking = async (modeName, value) => { setRankings(prev => { const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); const top3 = newList.slice(0, 3); const newRankings = { ...rankings, [modeName]: top3 }; localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings)); return newRankings; }); };
-  const getFinalGameRadar = () => { if (gameRadars.length === 0) return { novelty: 3, clarity: 3, relevance: 3, intelligence: 3, empathy: 3 }; const sum = gameRadars.reduce((acc, curr) => { const r = normalizeRadarData(curr); return { linguistic: acc.linguistic + r.linguistic, cognitive: acc.cognitive + r.cognitive, emotional: acc.emotional + r.emotional, focus: acc.focus + r.focus, novelty: acc.novelty + r.novelty, }; }, { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 }); const count = gameRadars.length; return { linguistic: sum.linguistic / count, cognitive: sum.cognitive / count, emotional: sum.emotional / count, focus: sum.focus / count, novelty: sum.novelty / count, }; };
+  const getFinalGameRadar = () => { if (gameRadars.length === 0) return { linguistic: 3, cognitive: 3, emotional: 3, focus: 3, novelty: 3 }; const sum = gameRadars.reduce((acc, curr) => { const r = normalizeRadarData(curr); return { linguistic: acc.linguistic + r.linguistic, cognitive: acc.cognitive + r.cognitive, emotional: acc.emotional + r.emotional, focus: acc.focus + r.focus, novelty: acc.novelty + r.novelty, }; }, { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 }); const count = gameRadars.length; return { linguistic: sum.linguistic / count, cognitive: sum.cognitive / count, emotional: sum.emotional / count, focus: sum.focus / count, novelty: sum.novelty / count, }; };
+
+  const addCardsToDeck = (newCards) => { if (!newCards || newCards.length === 0) return; setCardDeck(prev => [...prev, ...newCards]); registerActiveCards(newCards); };
+
+  const checkContentSafety = async (text) => { try { const res = await callGeminiFallback(`以下のテキストが不適切（暴力的、性的、差別的、攻撃的）かどうか判定してください。不適切なら{"unsafe":true}、問題なければ{"unsafe":false}を返してください。テキスト: ${text}`); return res?.unsafe === true; } catch (e) { return false; } };
 
   const registerActiveCards = (cards) => {
     if (!cards) return;
@@ -1065,7 +1115,7 @@ export default function AiOgiriApp() {
                   {(gameConfig.mode === 'single' && gameConfig.singleMode === 'score_attack' && currentRound >= TOTAL_ROUNDS) ? '結果発表へ' :
                     (gameConfig.mode === 'single' && gameConfig.singleMode === 'survival' && isSurvivalGameOver) ? '結果発表へ' :
                       (gameConfig.mode === 'single' && gameConfig.singleMode === 'time_attack' && players[0].score >= TIME_ATTACK_GOAL_SCORE) ? '結果発表へ' :
-                        (gameConfig.mode === 'multi' && players.some(p => p.score >= WIN_SCORE_MULTI)) ? '結果発表へ' : '次のラウンドへ'}
+                        (gameConfig.mode === 'multi' && ((gameConfig.multiGoalType === 'score' && players.some(p => p.score >= gameConfig.multiGoalValue)) || (gameConfig.multiGoalType === 'round' && currentRound >= gameConfig.multiGoalValue))) ? '結果発表へ' : '次のラウンドへ'}
                 </ActionButton>
               </div>
             )}
