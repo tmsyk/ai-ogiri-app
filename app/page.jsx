@@ -118,58 +118,53 @@ const compactComment = (comment, maxLength = 30) => {
 
 // --- データの正規化と計算ロジック ---
 const normalizeRadarData = (radar) => {
-  if (!radar) return { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 };
+  if (!radar) return { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0, resonance: 0 };
   return {
     linguistic: radar.linguistic || radar.hardness || radar['言語的'] || 0,
     cognitive: radar.cognitive || radar.relevance || radar.context || radar['認知的'] || 0,
     emotional: radar.emotional || radar.empathy || radar['情動的'] || 0,
     focus: radar.focus || radar.clarity || radar['視点'] || 0,
     novelty: radar.novelty || radar.surprise || radar['新規性'] || 0,
+    resonance: radar.resonance || radar['共感'] || radar['共感度'] || 0,
   };
 };
 
 const calculateScoreClientSide = (radar) => {
   const r = normalizeRadarData(radar);
+  const values = [r.linguistic, r.cognitive, r.emotional, r.focus, r.novelty, r.resonance];
 
-  // シュール・レスキュー（勢いがあるなら論理性は無視）
-  if (r.emotional >= 4 && r.cognitive <= 2) {
-    r.cognitive = 3; // 補正
-  }
+  const maxImpact = Math.max(...values);
+  const avgScore = values.reduce((a, b) => a + b, 0) / values.length;
 
-  const maxImpact = Math.max(r.linguistic, r.emotional, r.focus, r.novelty);
-  const avgScore = (r.linguistic + r.cognitive + r.emotional + r.focus + r.novelty) / 5.0;
+  // 中立基準: 全部3 → 50点
+  const power = (maxImpact * 0.5) + (avgScore * 0.5);
+  let rawScore = (power * 18) - 4;
 
-  // クライアント側でも甘めに調整
-  const power = (maxImpact * 0.6) + (avgScore * 0.4);
-  let rawScore = (power * 20) + 10;
-
+  // コンボボーナス
   let bonus = 0;
-  if (r.novelty >= 4) bonus += 5;
-  if (r.linguistic >= 4) bonus += 5;
-  if (r.emotional >= 4) bonus += 5;
+  const highCount = values.filter(v => v >= 4).length;
+  if (highCount >= 1) bonus += 3;
+  if (highCount >= 2) bonus += 4;
+  if (highCount >= 3) bonus += 5;
 
-  // シナジーボーナス（文脈×新規性）
-  if (r.novelty >= 3 && r.cognitive >= 3) {
-    bonus += 5;
+  // 低評価ペナルティ
+  if (maxImpact <= 2) {
+    rawScore = rawScore * 0.8;
   }
 
-  // シュールボーナス（勢い×非論理の救済）
-  if (r.emotional >= 4 && r.cognitive <= 2) {
-    bonus += 5;
-  }
-
-  return Math.min(100, Math.max(10, Math.floor(rawScore + bonus)));
+  return Math.min(100, Math.max(5, Math.floor(rawScore + bonus)));
 };
 
 const analyzeType = (radarRaw) => {
   const radar = normalizeRadarData(radarRaw);
-  const { linguistic, cognitive, emotional, focus, novelty } = radar;
-  const total = linguistic + cognitive + emotional + focus + novelty;
-  const maxVal = Math.max(linguistic, cognitive, emotional, focus, novelty);
+  const { linguistic, cognitive, emotional, focus, novelty, resonance } = radar;
+  const total = linguistic + cognitive + emotional + focus + novelty + resonance;
+  const maxVal = Math.max(linguistic, cognitive, emotional, focus, novelty, resonance);
 
-  if (total >= 20) return "お笑い完全生命体";
-  if (total <= 6) return "伸びしろしかない新人";
+  if (total >= 24) return "お笑い完全生命体";
+  if (total <= 7) return "伸びしろしかない新人";
 
+  if (maxVal === resonance) return "共感の天才";
   if (maxVal === linguistic) return "言葉選びの魔術師";
   if (maxVal === cognitive) return "発想のトリックスター";
   if (maxVal === emotional) return "感情の揺さぶり屋";
@@ -251,16 +246,17 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
 };
 
 const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
+  const numAxes = 6;
   const r = size / 2, c = size / 2, max = maxValue;
-  const labels = ["言語的", "認知的", "情動的", "視点", "新規性"];
-  const keys = ["linguistic", "cognitive", "emotional", "focus", "novelty"];
+  const labels = ["言語的", "認知的", "情動的", "視点", "新規性", "共感"];
+  const keys = ["linguistic", "cognitive", "emotional", "focus", "novelty", "resonance"];
   const safeData = normalizeRadarData(data);
 
   const getP = (v, i) => {
-    const val = Math.min(max, Math.max(0, v || 0)); // Clamp value to max
+    const val = Math.min(max, Math.max(0, v || 0));
     const ratio = val <= 0 ? 0 : 0.2 + (val / max) * 0.8;
     const radius = ratio * r * 0.75;
-    return { x: c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2), y: c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2) };
+    return { x: c + radius * Math.cos((Math.PI * 2 * i) / numAxes - Math.PI / 2), y: c + radius * Math.sin((Math.PI * 2 * i) / numAxes - Math.PI / 2) };
   };
   const points = keys.map((k, i) => getP(safeData[k], i)).map(p => `${p.x},${p.y}`).join(" ");
   const bgLevels = [5, 4, 3, 2, 1];
@@ -268,10 +264,10 @@ const RadarChart = ({ data, size = 120, maxValue = 5 }) => {
   return (
     <div className="relative flex justify-center items-center" style={{ width: size, height: size }}>
       <svg width={size} height={size} className="overflow-visible">
-        {bgLevels.map(l => (<polygon key={l} points={keys.map((_, i) => { const radius = (l / 5) * r * 0.90; return (c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2)); }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />))}
-        {keys.map((_, i) => { const radius = r * 0.90; const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; })}
+        {bgLevels.map(l => (<polygon key={l} points={keys.map((_, i) => { const radius = (l / 5) * r * 0.90; return (c + radius * Math.cos((Math.PI * 2 * i) / numAxes - Math.PI / 2)) + "," + (c + radius * Math.sin((Math.PI * 2 * i) / numAxes - Math.PI / 2)); }).join(" ")} fill="none" stroke="#e2e8f0" strokeWidth="1" />))}
+        {keys.map((_, i) => { const radius = r * 0.90; const x = c + radius * Math.cos((Math.PI * 2 * i) / numAxes - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / numAxes - Math.PI / 2); return <line key={i} x1={c} y1={c} x2={x} y2={y} stroke="#e2e8f0" strokeWidth="1" />; })}
         <polygon points={points} fill="rgba(99, 102, 241, 0.5)" stroke="#4f46e5" strokeWidth="2" />
-        {keys.map((_, i) => { const radius = r * 0.90 * 1.35; const x = c + radius * Math.cos((Math.PI * 2 * i) / 5 - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / 5 - Math.PI / 2); return (<text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text>); })}
+        {keys.map((_, i) => { const radius = r * 0.90 * 1.35; const x = c + radius * Math.cos((Math.PI * 2 * i) / numAxes - Math.PI / 2); const y = c + radius * Math.sin((Math.PI * 2 * i) / numAxes - Math.PI / 2); return (<text key={i} x={x} y={y} fontSize="10" textAnchor="middle" dominantBaseline="middle" fill="#475569" fontWeight="bold">{labels[i]}</text>); })}
       </svg>
     </div>
   );
@@ -599,7 +595,7 @@ export default function AiOgiriApp() {
   const saveAiCommentFeedback = async (comment, isGood) => { if (!comment) return; const feedbackEntry = { comment, isGood, date: new Date().toISOString() }; const localFeedback = JSON.parse(localStorage.getItem('aiOgiriAiFeedback') || '[]'); const nextFeedback = [feedbackEntry, ...localFeedback].slice(0, 20); localStorage.setItem('aiOgiriAiFeedback', JSON.stringify(nextFeedback)); if (currentUser && !currentUser.isAnonymous) { const ref = getUserDocRef(currentUser.uid, 'feedback'); if (ref) await setDoc(ref, { entries: nextFeedback }).catch(console.error); } };
   const resetLearnedData = () => { if (window.confirm("この端末に保存されたAIの学習データをリセットしますか？")) { localStorage.removeItem('aiOgiriLearnedData'); setLearned({ topics: [], answers: [], pool: [] }); setTopicsList([...FALLBACK_TOPICS]); playSound('timeup'); alert("リセットしました。"); } };
   const updateRanking = async (modeName, value) => { setRankings(prev => { const currentList = prev[modeName] || []; const newEntry = { value, date: new Date().toLocaleDateString() }; let newList = [...currentList, newEntry]; if (modeName === 'score_attack' || modeName === 'survival') newList.sort((a, b) => b.value - a.value); else if (modeName === 'time_attack') newList.sort((a, b) => a.value - b.value); const top3 = newList.slice(0, 3); const newRankings = { ...rankings, [modeName]: top3 }; localStorage.setItem('aiOgiriRankings', JSON.stringify(newRankings)); return newRankings; }); };
-  const getFinalGameRadar = () => { if (gameRadars.length === 0) return { linguistic: 3, cognitive: 3, emotional: 3, focus: 3, novelty: 3 }; const sum = gameRadars.reduce((acc, curr) => { const r = normalizeRadarData(curr); return { linguistic: acc.linguistic + r.linguistic, cognitive: acc.cognitive + r.cognitive, emotional: acc.emotional + r.emotional, focus: acc.focus + r.focus, novelty: acc.novelty + r.novelty, }; }, { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0 }); const count = gameRadars.length; return { linguistic: sum.linguistic / count, cognitive: sum.cognitive / count, emotional: sum.emotional / count, focus: sum.focus / count, novelty: sum.novelty / count, }; };
+  const getFinalGameRadar = () => { if (gameRadars.length === 0) return { linguistic: 3, cognitive: 3, emotional: 3, focus: 3, novelty: 3, resonance: 3 }; const sum = gameRadars.reduce((acc, curr) => { const r = normalizeRadarData(curr); return { linguistic: acc.linguistic + r.linguistic, cognitive: acc.cognitive + r.cognitive, emotional: acc.emotional + r.emotional, focus: acc.focus + r.focus, novelty: acc.novelty + r.novelty, resonance: acc.resonance + r.resonance, }; }, { linguistic: 0, cognitive: 0, emotional: 0, focus: 0, novelty: 0, resonance: 0 }); const count = gameRadars.length; return { linguistic: sum.linguistic / count, cognitive: sum.cognitive / count, emotional: sum.emotional / count, focus: sum.focus / count, novelty: sum.novelty / count, resonance: sum.resonance / count, }; };
 
   const addCardsToDeck = (newCards) => { if (!newCards || newCards.length === 0) return; setCardDeck(prev => [...prev, ...newCards]); registerActiveCards(newCards); };
 
@@ -839,7 +835,7 @@ export default function AiOgiriApp() {
     }
     if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
     let score = 50, comment = "...", radar = null, distance = 0.5, reasoning = "", hardness = 0.5, ai_example = "", word_texture = "";
-    try { if (isAiActive) { const res = await fetchAiJudgment(currentTopic, text, isManual); if (res) { score = res.score !== undefined ? res.score : 50; comment = res.comment; radar = normalizeRadarData(res.radar); distance = res.distance || 0.5; reasoning = res.reasoning || ""; hardness = res.hardness || 0.5; ai_example = res.ai_example || ""; word_texture = res.word_texture || ""; } else throw new Error("AI response null"); } else { throw new Error("AI inactive"); } } catch (e) { score = 40 + Math.floor(Math.random() * 40); comment = "評価エラー(Fallback)"; radar = { linguistic: 2, cognitive: 2, emotional: 2, focus: 2 }; distance = 0.5; }
+    try { if (isAiActive) { const res = await fetchAiJudgment(currentTopic, text, isManual); if (res) { score = res.score !== undefined ? res.score : 50; comment = res.comment; radar = normalizeRadarData(res.radar); distance = res.distance || 0.5; reasoning = res.reasoning || ""; hardness = res.hardness || 0.5; ai_example = res.ai_example || ""; word_texture = res.word_texture || ""; } else throw new Error("AI response null"); } else { throw new Error("AI inactive"); } } catch (e) { score = 30 + Math.floor(Math.random() * 30); comment = "評価エラー(Fallback)"; radar = { linguistic: 2, cognitive: 2, emotional: 2, focus: 2, novelty: 2, resonance: 2 }; distance = 0.5; }
 
     setAiComment(formatAiComment(comment)); if (radar) { updateUserStats(score, radar); setGameRadars(prev => [...prev, radar]); } const newZabuton = Math.floor(score / 10); setTotalZabuton(prev => prev + newZabuton);
     if (score >= HALL_OF_FAME_THRESHOLD) { const entry = { topic: currentTopic, answer: text, score, comment, radar, player: userName, date: new Date().toLocaleDateString() }; saveToHallOfFame(entry); if (gameConfig.singleMode === 'score_attack') checkAndSaveGlobalRank(entry); }

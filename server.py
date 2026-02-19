@@ -36,46 +36,43 @@ try:
 except Exception as e:
     print(f"Initialization error: {e}")
 
-# --- スコア計算ロジック（甘口調整版） ---
-def calculate_overall_score(radar):
+# --- スコア計算ロジック（中立版） ---
+def calculate_overall_score(radar, distance_multiplier=1.0):
     """
-    4次元モデルに基づく総合点計算。
-    AIが「3」をつけた場合に60-70点が出るように調整。
+    6次元モデルに基づく総合点計算（中立採点）。
+    AIが「3」をつけた場合に50点前後が出るように調整。
     """
-    # 各項目を取得（なければ2をデフォルトにして極端な0点を防ぐ）
-    linguistic = radar.get('linguistic', 2)
-    cognitive = radar.get('cognitive', 2)
-    emotional = radar.get('emotional', 2)
-    focus = radar.get('focus', 2)
-    novelty = radar.get('novelty', 2)
+    keys = ['linguistic', 'cognitive', 'emotional', 'focus', 'novelty', 'resonance']
+    values = [radar.get(k, 2) for k in keys]
 
     # 1. 突出度 (Peak): 最も高い要素を評価
-    max_val = max(linguistic, cognitive, emotional, focus, novelty)
+    max_val = max(values)
     
     # 2. 平均点 (Average)
-    avg_val = (linguistic + cognitive + emotional + focus + novelty) / 5.0
+    avg_val = sum(values) / len(values)
 
-    # 3. 基礎スコア計算
-    # 最大値を重視しつつ、平均値で底上げ
-    # 例: 全部3なら power = 3.0。 全部2なら power = 2.0。
-    # 1点につき約15-20点の価値を持たせる
-    power = (max_val * 0.6) + (avg_val * 0.4)
-    
-    # 4. 100点満点換算
-    # power=3.0 -> 60点 + 基礎10点 = 70点
-    # power=5.0 -> 100点 + 基礎10点 = 110点 -> 100点
-    raw_score = (power * 20) + 10
+    # 3. 基礎スコア計算（中立基準: 全部3 → 50点）
+    power = (max_val * 0.5) + (avg_val * 0.5)
+    raw_score = (power * 18) - 4
 
-    # 5. コンボボーナス（尖った回答への報酬）
+    # 4. コンボボーナス（尖った回答への報酬）
     bonus = 0
-    if novelty >= 4: bonus += 5
-    if linguistic >= 4: bonus += 5
-    if emotional >= 4: bonus += 5
+    high_count = sum(1 for v in values if v >= 4)
+    if high_count >= 1: bonus += 3
+    if high_count >= 2: bonus += 4
+    if high_count >= 3: bonus += 5
 
-    final_score = int(raw_score + bonus)
+    # 5. 意味的距離によるスコア補正
+    adjusted = (raw_score + bonus) * distance_multiplier
+
+    # 6. 低評価ペナルティ（全部2以下なら厳しくする）
+    if max_val <= 2:
+        adjusted = adjusted * 0.8
+
+    final_score = int(adjusted)
     
     # 範囲制限
-    return min(100, max(10, final_score))
+    return min(100, max(5, final_score))
 
 # --- Watashihaモデル用関数 (Gemini代打付き) ---
 def generate_by_watashiha(prompt_text):
@@ -159,9 +156,11 @@ def calculate_cosine_similarity(vec1, vec2):
     return dot_product / (norm_a * norm_b)
 
 def get_distance_multiplier(similarity):
-    if 0.4 <= similarity <= 0.6: return 1.2 
-    elif 0.2 < similarity < 0.8: return 1.0 
-    else: return 0.8 
+    """意味的距離に基づくスコア倍率。Sweet Spotから離れるほどペナルティ。"""
+    if 0.35 <= similarity <= 0.65: return 1.15  # Sweet Spot: ボーナス
+    elif 0.25 <= similarity < 0.35 or 0.65 < similarity <= 0.75: return 1.0  # Normal: 等倍
+    elif 0.15 <= similarity < 0.25 or 0.75 < similarity <= 0.85: return 0.85  # やや外れ: 軽いペナルティ
+    else: return 0.7  # Too Close / Too Far: 強めのペナルティ
 
 # --- APIエンドポイント ---
 
@@ -237,7 +236,7 @@ def judge_answer(req: JudgeRequest):
     personas = {
         "logic": "あなたは「名詞アンカー理論」を提唱するお笑い評論家です。",
         "standard": "あなたは標準的なお笑い審査員です。",
-        "strict": "あなたは激辛審査員です。",
+        "strict": "あなたは激辛審査員です。つまらなければ容赦なく低評価してください。",
         "gal": "あなたはギャル審査員です。",
         "chuuni": "あなたは厨二病審査員です。"
     }
@@ -248,14 +247,14 @@ def judge_answer(req: JudgeRequest):
         logs = "\n".join(req.feedback_logs[:5])
         feedback_text = f"[ユーザーの好み]\n{logs}"
 
-    # 評価基準を少し甘めに指示
     radar_desc = """
-    以下の4つの次元(0-5点)で評価してください。面白ければ積極的に4点以上をつけてください。
-    1. linguistic (言語的距離): 言葉の硬度と格式。
-    2. cognitive (認知的距離): カテゴリーの飛躍。
-    3. emotional (情動的距離): 聖と俗のギャップ。
-    4. focus (視点・解像度): 具体と抽象のズレ。
-    5. novelty (新規性): アイデアの斬新さ。
+    以下の6つの次元(0-5点)で評価してください。各項目は独立して評価し、妥当な点数をつけてください。
+    1. linguistic (言語的距離): 言葉の硬度と格式のギャップ。日常語と専門語の落差。
+    2. cognitive (認知的距離): カテゴリーの飛躍。お題と回答のジャンルがどれだけ離れているか。
+    3. emotional (情動的距離): 聖と俗のギャップ。真面目な場面に俗な回答、またはその逆。
+    4. focus (視点・解像度): 具体と抽象のズレ。独自の切り口で捉えているか。
+    5. novelty (新規性): アイデアの斬新さ。ありきたりでなく、意外性があるか。
+    6. resonance (共感度): 「あるある」「わかる」と思わせる共感力。日常の経験に響くか。
     """
 
     prompt = f"""
@@ -272,17 +271,17 @@ def judge_answer(req: JudgeRequest):
     {radar_desc}
     
     # 指示
-    - 全体的に少し甘めの採点（60点基準）でお願いします。
-    - どれか一つの項目でも突出していれば高評価にしてください。
-    - **シュールさの評価**: 論理的に意味不明でも、視覚的インパクトや勢い、リズム感が良ければ「cognitive（飛躍）」や「emotional（情動）」を高く評価してください。
-    - **文脈の評価**: ランダムな単語ではなく、お題に対して「意外な角度」から刺さっているものを高く評価してください。
+    - **中立な採点**: 平均的な回答は3点（50点前後）、優れた回答は4-5点、つまらない回答は1-2点としてください。
+    - **お題との関連性**: ランダムな単語ではなく、お題に対して「意外な角度」から刺さっているものを高く評価してください。
+    - **シュールさの評価**: 論理的に意味不明でも、視覚的インパクトや独自のセンスがあれば「cognitive」や「novelty」を高く評価してください。ただし、ただの無関係な単語は低く評価してください。
+    - **共感の評価**: 「わかる！」「そういうのあるある」と思わせる回答は「resonance」を高くしてください。
     
     出力JSON: {{
         "comment": "15文字程度の鋭いツッコミ",
         "reasoning": "解説",
         "hardness": 0.5,
         "word_texture": "硬/軟/外",
-        "radar": {{"linguistic":3, "cognitive":3, "emotional":3, "focus":3, "novelty":3}}
+        "radar": {{"linguistic":3, "cognitive":3, "emotional":3, "focus":3, "novelty":3, "resonance":3}}
     }}
     """
 
@@ -295,14 +294,11 @@ def judge_answer(req: JudgeRequest):
         
         radar = result.get("radar", {})
         # 欠損項目の補完
-        for key in ["linguistic", "cognitive", "emotional", "focus", "novelty"]:
+        for key in ["linguistic", "cognitive", "emotional", "focus", "novelty", "resonance"]:
             if key not in radar: radar[key] = 2
             
-        # 認知的距離の補正
-        radar["cognitive"] = max(0, min(5, round(radar["cognitive"] * multiplier)))
-        
-        # スコア計算
-        final_score = calculate_overall_score(radar)
+        # スコア計算（距離倍率を渡す）
+        final_score = calculate_overall_score(radar, multiplier)
         
         return {
             "score": final_score,
@@ -318,12 +314,12 @@ def judge_answer(req: JudgeRequest):
     except Exception as e:
         print(f"Judge Error: {e}")
         return {
-            "score": 50, 
+            "score": 40, 
             "comment": "採点不能...",
             "reasoning": "通信エラーが発生しました。",
             "distance": similarity,
             "ai_example": ai_example,
-            "radar": {"linguistic":2,"cognitive":2,"emotional":2,"focus":2,"novelty":2}
+            "radar": {"linguistic":2,"cognitive":2,"emotional":2,"focus":2,"novelty":2,"resonance":2}
         }
 
 if __name__ == "__main__":
