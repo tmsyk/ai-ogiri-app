@@ -196,8 +196,8 @@ def generate_topic(req: TopicRequest):
 def generate_cards(req: CardRequest):
     prompt = f"""
     大喜利の回答カード（単語・短いフレーズ）を{req.count}個作成。
-    条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.既出避け: {', '.join(req.used_cards[-20:])}
-    出力JSON: {{"answers": [{{ "text": "...", "rarity": "normal" }}, ... ]}}
+    条件: 1.実在する言葉 2.ジャンルバラバラ 3.既出避け: {', '.join(req.used_cards[-20:])}
+    出力JSON: {{"answers": [{{ "text": "..." }}, ... ]}}
     """
     try:
         response = client.models.generate_content(model=GEN_MODEL_NAME, contents=prompt, config={'response_mime_type': 'application/json'})

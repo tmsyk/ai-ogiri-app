@@ -33,7 +33,7 @@ const HAND_SIZE = 8;
 const INITIAL_DECK_SIZE = 60;
 const API_TIMEOUT_MS = 60000;
 
-const JOKER_CARD = { text: "🤖 AIのボケ", rarity: "epic" };
+const JOKER_CARD = { text: "🤖 AIのボケ" };
 
 const JUDGES = {
   logic: { name: "理論派審査員", icon: Microscope, desc: "名詞アンカー理論に基づき、4次元の距離で厳格に採点します。" },
@@ -44,7 +44,7 @@ const JUDGES = {
 };
 
 const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
-const FALLBACK_ANSWERS = [{ text: "プリン", rarity: "normal" }, { text: "ポチ", rarity: "normal" }, { text: "確定申告", rarity: "normal" }, { text: "弁当", rarity: "normal" }, { text: "ダイナマイト", rarity: "rare" }, { text: "肖像画", rarity: "normal" }, { text: "伝説の剣", rarity: "rare" }, { text: "消しゴム", rarity: "normal" }, { text: "わさび", rarity: "normal" }, { text: "自分探し", rarity: "normal" }];
+const FALLBACK_ANSWERS = [{ text: "プリン" }, { text: "ポチ" }, { text: "確定申告" }, { text: "弁当" }, { text: "ダイナマイト" }, { text: "肖像画" }, { text: "伝説の剣" }, { text: "消しゴム" }, { text: "わさび" }, { text: "自分探し" }];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
 // --- Firebase設定 ---
@@ -104,7 +104,7 @@ const getUniqueCards = (cards, usedSet) => {
     const normalized = normalizeCardText(text);
     if (!normalized || usedSet.has(normalized) || local.has(normalized)) continue;
     local.add(normalized);
-    unique.push(typeof card === 'string' ? { text: card, rarity: 'normal' } : card);
+    unique.push(typeof card === 'string' ? { text: card } : card);
   }
   return unique;
 };
@@ -235,8 +235,6 @@ const ModalBase = ({ onClose, title, icon: Icon, children }) => (
 const Card = ({ card, isSelected, onClick, disabled }) => {
   if (!card) return null;
   const text = typeof card === 'string' ? card : (card.text || "???");
-  const isRare = typeof card !== 'string' && card.rarity === 'rare';
-  const isEpic = typeof card !== 'string' && card.rarity === 'epic';
 
   return (
     <button
@@ -247,7 +245,6 @@ const Card = ({ card, isSelected, onClick, disabled }) => {
       ${disabled ? 'opacity-60 cursor-not-allowed active:scale-100' : 'cursor-pointer hover:border-indigo-300 hover:shadow-md'}
       `}
     >
-      {/* rarity表示を削除 */}
       {text}
     </button>
   );
@@ -625,7 +622,7 @@ export default function AiOgiriApp() {
     }
   };
 
-  const collectCards = async (count) => { const collected = []; let remaining = count; const usedSet = activeCardsRef.current; if (isAiActive && remaining > 0) { const aiCards = await fetchAiCards(Math.max(remaining, HAND_SIZE), usedSet); if (aiCards.length > 0) { registerActiveCards(aiCards); collected.push(...aiCards); remaining -= aiCards.length; } } if (remaining > 0 && learned.cardPool?.length > 0) { const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t, rarity: 'normal' })), usedSet).slice(0, remaining); if (poolCards.length > 0) { registerActiveCards(poolCards); collected.push(...poolCards); remaining -= poolCards.length; } } if (remaining > 0) { const fallbackCards = getUniqueCards(FALLBACK_ANSWERS, usedSet).slice(0, remaining); if (fallbackCards.length > 0) { registerActiveCards(fallbackCards); collected.push(...fallbackCards); } } if (remaining > 0) { const resetCards = getUniqueCards(FALLBACK_ANSWERS, new Set()); collected.push(...resetCards.slice(0, remaining)); } return collected; };
+  const collectCards = async (count) => { const collected = []; let remaining = count; const usedSet = activeCardsRef.current; if (isAiActive && remaining > 0) { const aiCards = await fetchAiCards(Math.max(remaining, HAND_SIZE), usedSet); if (aiCards.length > 0) { registerActiveCards(aiCards); collected.push(...aiCards); remaining -= aiCards.length; } } if (remaining > 0 && learned.cardPool?.length > 0) { const poolCards = getUniqueCards(learned.cardPool.map(t => ({ text: t })), usedSet).slice(0, remaining); if (poolCards.length > 0) { registerActiveCards(poolCards); collected.push(...poolCards); remaining -= poolCards.length; } } if (remaining > 0) { const fallbackCards = getUniqueCards(FALLBACK_ANSWERS, usedSet).slice(0, remaining); if (fallbackCards.length > 0) { registerActiveCards(fallbackCards); collected.push(...fallbackCards); } } if (remaining > 0) { const resetCards = getUniqueCards(FALLBACK_ANSWERS, new Set()); collected.push(...resetCards.slice(0, remaining)); } return collected; };
   const refillHand = async (hand, deck, desiredSize = HAND_SIZE) => { let nextHand = [...hand]; let nextDeck = [...deck]; while (nextHand.length < desiredSize) { if (nextDeck.length === 0) { const refill = await collectCards(Math.max(desiredSize - nextHand.length, 5)); if (refill.length === 0) break; nextDeck = [...nextDeck, ...refill]; } const drawCard = nextDeck.shift(); if (!drawCard) break; const drawText = typeof drawCard === 'string' ? drawCard : drawCard.text; if (!nextHand.some(c => (typeof c === 'string' ? c : c.text) === drawText)) { nextHand.push(drawCard); } } return { hand: nextHand, deck: nextDeck }; };
   const callServer = async (endpoint, body) => { const controller = new AbortController(); const timeoutId = setTimeout(() => controller.abort(), API_TIMEOUT_MS); try { const res = await fetch(`${API_BASE_URL}${endpoint}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: controller.signal }); if (!res.ok) throw new Error(`Server error: ${res.status}`); return await res.json(); } finally { clearTimeout(timeoutId); } };
   const callGeminiFallback = async (prompt) => { try { const res = await fetch('/api/gemini', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prompt }) }); if (!res.ok) throw new Error(); const data = await res.json(); const text = data.candidates?.[0]?.content?.parts?.[0]?.text; const json = text.match(/\{[\s\S]*\}/); return json ? JSON.parse(json[0]) : JSON.parse(text); } catch (e) { return null; } };
@@ -652,10 +649,10 @@ export default function AiOgiriApp() {
       if (Math.random() < 0.05) unique.push(JOKER_CARD);
       return unique;
     } catch (e) {
-      const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.インパクト強なら"rarity":"rare" 3.ジャンルバラバラ 出力: {"answers": [{ "text": "...", "rarity": "normal" }, ... ]}`;
+      const prompt = `大喜利の回答カード（単語）を${count}個作成。条件: 1.実在する言葉 2.ジャンルバラバラ 出力: {"answers": [{ "text": "..." }, ... ]}`;
       const res = await callGeminiFallback(prompt);
       const rawAnswers = res?.answers || [];
-      const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a, rarity: 'normal' } : a);
+      const formattedAnswers = rawAnswers.map(a => typeof a === 'string' ? { text: a } : a);
       const uniqueAnswers = getUniqueCards(formattedAnswers, usedSet);
       if (uniqueAnswers.length > 0) saveGeneratedCards(uniqueAnswers);
       return uniqueAnswers;
@@ -843,7 +840,7 @@ export default function AiOgiriApp() {
     if (gameConfig.singleMode === 'time_attack') setAnswerCount(prev => prev + 1);
     let score = 50, comment = "...", radar = null, distance = 0.5, reasoning = "", hardness = 0.5, ai_example = "", word_texture = "";
     try { if (isAiActive) { const res = await fetchAiJudgment(currentTopic, text, isManual); if (res) { score = res.score !== undefined ? res.score : 50; comment = res.comment; radar = normalizeRadarData(res.radar); distance = res.distance || 0.5; reasoning = res.reasoning || ""; hardness = res.hardness || 0.5; ai_example = res.ai_example || ""; word_texture = res.word_texture || ""; } else throw new Error("AI response null"); } else { throw new Error("AI inactive"); } } catch (e) { score = 40 + Math.floor(Math.random() * 40); comment = "評価エラー(Fallback)"; radar = { linguistic: 2, cognitive: 2, emotional: 2, focus: 2 }; distance = 0.5; }
-    if (!isManual) { const usedCard = singlePlayerHand.find(c => (typeof c === 'string' ? c : c.text) === text); if (usedCard && typeof usedCard !== 'string' && usedCard.rarity === 'rare') { score += 5; reasoning += " (✨レアカードボーナス +5点)"; } }
+
     setAiComment(formatAiComment(comment)); if (radar) { updateUserStats(score, radar); setGameRadars(prev => [...prev, radar]); } const newZabuton = Math.floor(score / 10); setTotalZabuton(prev => prev + newZabuton);
     if (score >= HALL_OF_FAME_THRESHOLD) { const entry = { topic: currentTopic, answer: text, score, comment, radar, player: userName, date: new Date().toLocaleDateString() }; saveToHallOfFame(entry); if (gameConfig.singleMode === 'score_attack') checkAndSaveGlobalRank(entry); }
     const currentPassScore = SURVIVAL_PASS_SCORE + (currentRound - 1) * 10; let isGameOver = false; if (gameConfig.singleMode === 'survival' && score < currentPassScore) { setIsSurvivalGameOver(true); isGameOver = true; } if (gameConfig.singleMode === 'time_attack') { if (players[0].score + score >= TIME_ATTACK_GOAL_SCORE) setFinishTime(Date.now()); }
