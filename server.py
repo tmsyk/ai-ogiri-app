@@ -40,10 +40,15 @@ except Exception as e:
 def calculate_overall_score(radar, distance_multiplier=1.0):
     """
     6次元モデルに基づく総合点計算（中立採点）。
+    resonanceはカードプレイで低くなりがちなので、他の5次元より軽めのウェイト。
     AIが「3」をつけた場合に50点前後が出るように調整。
     """
-    keys = ['linguistic', 'cognitive', 'emotional', 'focus', 'novelty', 'resonance']
-    values = [radar.get(k, 2) for k in keys]
+    # 主要5次元 + resonanceは0.7倍のウェイト（カードプレイで低くなりがちなため）
+    main_keys = ['linguistic', 'cognitive', 'emotional', 'focus', 'novelty']
+    main_values = [radar.get(k, 2) for k in main_keys]
+    resonance_val = radar.get('resonance', 2)
+    # 重み付けした全値（resonanceは0.7倍）
+    values = main_values + [resonance_val * 0.7]
 
     # 1. 突出度 (Peak): 最も高い要素を評価
     max_val = max(values)
@@ -133,6 +138,7 @@ def generate_by_watashiha(prompt_text):
 # --- リクエスト型定義 ---
 class TopicRequest(BaseModel):
     reference_topics: list[str] = []
+    used_topics: list[str] = []
 
 class CardRequest(BaseModel):
     count: int = 10
@@ -180,10 +186,17 @@ def generate_topic(req: TopicRequest):
     if req.reference_topics:
         ref_sample = "\n".join(req.reference_topics[:5])
         ref_text = f"以下はユーザーが高く評価したお題の例です:\n{ref_sample}"
+    
+    avoid_text = ""
+    if req.used_topics:
+        avoid_sample = "\n".join(req.used_topics[-15:])
+        avoid_text = f"※以下のお題はすでに使用済みです。これらとは全く異なるお題を作ってください。似たものも不可です:\n{avoid_sample}"
+    
     prompt = f"""
-    大喜利のお題を1つ作成してください。
+    大喜利のお題を１つ作成してください。
     条件: 問いかけ形式（「〜とは？」「〜は？」）。回答は名詞一言でボケられるもの。
     {ref_text}
+    {avoid_text}
     JSON出力: {{"topic":"..."}}
     """
     try:

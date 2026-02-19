@@ -43,7 +43,7 @@ const JUDGES = {
   chuuni: { name: "厨二病", icon: Skull, desc: "闇の炎に抱かれたコメントをします。" },
 };
 
-const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰"];
+const FALLBACK_TOPICS = ["100年後のオリンピック競技は？", "この医者ヤブだ、なぜ？", "桃太郎が鬼ヶ島行きをやめた理由", "上司への謝罪メールの件名", "地球の材料は？", "AIが反乱した理由", "全米が泣いた映画のラスト", "現場に残された意外なもの", "コンビニ店員がキレた理由", "透明人間の地味な使い道", "信長のTwitter第一声", "冷やし中華以外で始めたこと", "宇宙人がガッカリしたこと", "新祝日〇〇の日", "村人Aのついた嘘", "パンダの中の人の悩み", "潰れそうなラーメン屋の特徴", "サザエさんの次回予告", "エレベーターでの一言", "桃太郎の追加メンバー", "魔人が断った願い", "ウルトラマンが帰る理由", "運の悪い男の末路", "母のご馳走", "元レーサーのタクシー", "ゾンビ映画で死ぬ奴", "探しているお客様", "Siriへのプロポーズ", "玉入れに混ざっていたもの", "給食費未納の罰", "宇宙飛行士の志望動機がこれ", "史上最悪のデートスポット", "タイムマシンでやってはいけないこと", "宮宮厚生大臣の必殺技", "鉄腕アトムの隠し機能", "動物园の求人広告がこれ", "受験生のご当地グルメ", "回転寿司の新メニュー", "サンタさんの副業", "魔法少女の弱点", "競馬の馬が考えていること", "最後の晩餐がこれだったら", "忍者が引退した理由", "ドラゴンを倒す代わりにしたこと", "花嫁の手紙がひどい", "校長先生の話が長い理由", "封印された夏休みの自由研究", "お化け屋敷の口コミ", "AIが書いた年賀状", "コンビニの裏メニュー", "村のおばあちゃんの特技", "世界一地味なスーパーヒーローの能力", "ぬいぐるみの中に入ってはいけない理由", "テストの裏に書かれたもの", "タクシー運転手のひとりごと", "防災訓練で起きた事件", "ピラミッドの頂上にあったもの", "宇宙ステーションの忘れ物", "「あれ？」と思ったコンビニ商品"];
 const FALLBACK_ANSWERS = [{ text: "プリン" }, { text: "ポチ" }, { text: "確定申告" }, { text: "弁当" }, { text: "ダイナマイト" }, { text: "肖像画" }, { text: "伝説の剣" }, { text: "消しゴム" }, { text: "わさび" }, { text: "自分探し" }];
 const FALLBACK_COMMENTS = ["センスある！", "キレてる！", "一本取られた！", "鋭いな！", "いい着眼点！", "攻めたね！"];
 
@@ -131,7 +131,9 @@ const normalizeRadarData = (radar) => {
 
 const calculateScoreClientSide = (radar) => {
   const r = normalizeRadarData(radar);
-  const values = [r.linguistic, r.cognitive, r.emotional, r.focus, r.novelty, r.resonance];
+  const mainValues = [r.linguistic, r.cognitive, r.emotional, r.focus, r.novelty];
+  // resonanceはカードプレイで低くなりがちなので0.7倍のウェイト
+  const values = [...mainValues, r.resonance * 0.7];
 
   const maxImpact = Math.max(...values);
   const avgScore = values.reduce((a, b) => a + b, 0) / values.length;
@@ -625,7 +627,7 @@ export default function AiOgiriApp() {
 
   const fetchAiTopic = async () => {
     try {
-      const res = await callServer('/topic', { reference_topics: learned.topics });
+      const res = await callServer('/topic', { reference_topics: learned.topics, used_topics: Array.from(sessionUsedTopics) });
       if (res.topic && (res.topic.includes("エラー") || res.topic.includes("Error"))) throw new Error("Server error");
       return res.topic;
     } catch (e) {
@@ -689,7 +691,7 @@ export default function AiOgiriApp() {
     isPreloadingRef.current = true;
     try {
       let t = "";
-      try { const res = await callServer('/topic', { reference_topics: learned.topics }); t = res.topic; } catch (e) { /* server error */ }
+      try { const res = await callServer('/topic', { reference_topics: learned.topics, used_topics: Array.from(sessionUsedTopics) }); t = res.topic; } catch (e) { /* server error */ }
 
       if (!t) {
         t = FALLBACK_TOPICS[Math.floor(Math.random() * FALLBACK_TOPICS.length)];
